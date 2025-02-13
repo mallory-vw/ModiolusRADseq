@@ -1,0 +1,615 @@
+##################
+#####Outliers#####
+##################
+
+###########PCAdapt Outliers###########
+
+######R######
+#data formatting
+library(plyr)
+library(reshape2)
+library(splitstackshape)
+library(tidyverse)
+
+#data analysis
+library(pcadapt)
+library(qvalue)
+
+##### Load Metadata #####
+#convert ped data to genepop using PGDspider
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv) 
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv
+
+#read in metadata
+AllSample_metadata <- read.csv("/data/AllMetadata.csv") %>% 
+  dplyr::select(SampleID,Pop,Sex,Total_Age) %>% 
+  dplyr::rename(ID=SampleID)
+
+#read in SNP names from the .bim file
+SNPs_MissingRemoved_HWE_LD2_SNPs <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bim",sep="",header=F) %>% 
+  dplyr::rename(SNP=V2) %>% 
+  dplyr::select(SNP)
+SNPs_MissingRemoved_HWE_LD2_SNPs <- SNPs_MissingRemoved_HWE_LD2_SNPs[[1]]
+
+#load SNP and Individual read depths from All SNPs, before filtering with populations
+SNPs_SampleIDs <- read.delim("/data/04_Aligned/gStacks/VCFSampleIDs.txt",header=F)[[1]]
+
+#load total depth per SNP per sample
+SNPs_MissingRemoved_HWE_LD2_Depths <- read.delim(/data/04_Aligned/gStacks/ReadDepthPerSNPPerIndiv.txt",header=F,na.strings = ".") %>% #load read depths for all SNPs
+  setNames(c("Name",SNPs_SampleIDs)) %>% 
+  mutate(Name2=Name) %>% 
+  separate_wider_delim(cols=Name2, delim = " ", names=c("CHROM","POS","SNP","Junk")) %>% 
+  dplyr::mutate(SNP = str_replace(SNP,":","_")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][+]")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][-]")) %>% 
+  relocate(SNP, .before=Name) %>% 
+  dplyr::select(!c(Name,CHROM,POS,Junk)) %>% 
+  filter(SNP %in% SNPs_MissingRemoved_HWE_LD2_SNPs) %>% #keep only the SNPs that are in the final dataset
+  dplyr::select(c(SNP, all_of(SNPs_MissingRemoved_HWE_LD2_Indivs))) %>% #keep only the individuals that are in the final dataset
+  mutate(TotalSNPDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  mutate(MeanSNPDepth = round(rowMeans(.[,2:ncol(.)], na.rm=T))) %>% 
+  relocate(c(TotalSNPDepth,MeanSNPDepth), .after=SNP) 
+
+#total depth per SNP
+SNPs_MissingRemoved_HWE_LD2_TotalSNPDepths <- SNPs_MissingRemoved_HWE_LD2_Depths %>% 
+  dplyr::select(SNP,TotalSNPDepth,MeanSNPDepth)
+
+#total and mean depth per indiv
+SNPs_MissingRemoved_HWE_LD2_TotalIndivDepths <- SNPs_MissingRemoved_HWE_LD2_Depths %>% 
+  dplyr::select(!c(TotalSNPDepth,MeanSNPDepth)) %>% 
+  pivot_longer(!SNP,names_to = "ID", values_to = "Depth") %>% #transpose so Individuals are rows
+  mutate(Depth=as.numeric(Depth)) %>% 
+  pivot_wider(names_from = "SNP", values_from = "Depth") %>% 
+  mutate(TotalIndivDepth = rowSums(.[,2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalIndivDepth, .after=ID) %>% 
+  mutate(MeanIndivDepth = round(rowMeans(.[,3:ncol(.)], na.rm=T))) %>% 
+  relocate(MeanIndivDepth, .after=TotalIndivDepth) %>% 
+  dplyr::select(ID,TotalIndivDepth,MeanIndivDepth)
+
+ReadDepthPerIndiv_SNPs_MissingRemoved_HWE_LD2_Histo <- ggplot(data = SNPs_MissingRemoved_HWE_LD2_TotalIndivDepths,
+                                                                aes(x=TotalIndivDepth)) +
+  geom_histogram(bins=50) +
+  ylab('Count of Individuals') + 
+  xlab("Total Read Depth Across all SNPs") +
+  theme_bw() +
+  theme(axis.title=element_text(size = 20),
+        legend.title=element_blank(),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank());
+ggsave(ReadDepthPerIndiv_SNPs_MissingRemoved_HWE_LD2_Histo, 
+       file = /data/04_Aligned/gStacks/ReadDepthPerIndiv_SNPs_MissingRemoved_HWE_LD2_Histo.pdf", 
+       height = 8,width = 16, units = "in")
+
+##### Load Genetic Data #####
+SNPs_MissingRemoved_HWE_LD2_PCAdapt <- read.pcadapt(input = "/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed", type="bed")
+
+#Run PCadapt
+PCA_SNPs_MissingRemoved_HWE_LD2 <- pcadapt(SNPs_MissingRemoved_HWE_LD2_PCAdapt, K=2, min.maf=0.01)
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option = "screeplot") #k=2 is the optimal K
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option = "scores", pop = SNPs_MissingRemoved_HWE_LD2_PopIndiv$Pop)
+
+#Extract outliers
+summary(PCA_SNPs_MissingRemoved_HWE_LD2)
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option="qqplot")
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option="manhattan")
+hist(PCA_SNPs_MissingRemoved_HWE_LD2$pvalues, breaks=100)
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option="stat.distribution")
+
+alpha <- 0.05 #FDR of 5%
+
+Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2 <- as.data.frame(PCA_SNPs_MissingRemoved_HWE_LD2$pvalues)
+Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2$SNPs <- SNPs_MissingRemoved_HWE_LD2_SNPs
+colnames(Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2$SNPs) <- c("pval","SNP")
+
+#q-value
+Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2$qval <- qvalue(Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2$pval)$qvalues
+Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2 <- Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2 %>% 
+  mutate(qval_outliers = case_when(is.na(qval) ~ "unknown",
+                                   qval < alpha ~ "outlier",
+                                   qval >= alpha ~ "neutral",
+                                   .default = "fail"))
+table(Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2$qval_outliers) # 18 outliers
+
+#output list of outliers
+Outliers_PCA_SNPs_MissingRemoved_HWE_LD2 <- Pvalues_PCA_SNPs_MissingRemoved_HWE_LD2 %>% 
+  filter(qval_outliers == "outlier")
+write_lines(Outliers_PCA_SNPs_MissingRemoved_HWE_LD2$SNP, 
+            file="/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_PCadaptOutliers.txt", sep="\n")
+
+######plink######
+#extract PCadapt outliers
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2 \
+--extract SNPs_MissingRemoved_HWE_LD2_PCadaptOutliers.txt \
+--make-bed --recode \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_PCAdaptOutliers --allow-extra-chr
+
+###########BayeScan Outliers###########
+
+######bash######
+#Create and load conda environment
+conda create -n HM_RAD_BAYESCAN -c bioconda
+conda activate HM_RAD_BAYESCAN
+conda install -c conda-forge -c bioconda bayescan 
+
+#run BayeScan
+./BayeScan2.1_linux64bits /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_BS.txt -od /data/05_Filtered/Aligned/MissingRemoved/BayescanOutput/
+
+######R######
+#make sure to load plot_R.r from the BayeScan program directory before plotting
+plot_bayescan("/data/05_Filtered/Aligned/MissingRemoved/BayescanOutput/SNPs_MissingRemoved_HWE_LD2_BS_fst.txt", FDR=0.05)
+plot_bayescan("/data/05_Filtered/Aligned/MissingRemoved/BayescanOutput/SNPs_MissingRemoved_HWE_LD2_BS_fst.txt", FDR=0.05)$outliers #3 outliers, the position number of outliers in the table matches order in the data file
+
+#load output values and add in SNP name
+BS_output <- read_table("/data/05_Filtered/Aligned/MissingRemoved/BayescanOutput/SNPs_MissingRemoved_HWE_LD2_BS_fst.txt", FDR=0.05), col_names = c("SNPNumber","prob","log1o(PO)","qval","alpha","fst")) %>% 
+  filter(!row_number() %in% c(1)) %>% 
+  mutate(SNP = SNPs_MissingRemoved_HWE_LD2_SNPs,
+         Outlier = case_when(SNPNumber %in% c(287,4953,7110) ~ "outlier", .default = "neutral")) #these are the row numbers for the 3 outliers detected
+
+write_lines(subset(BS_output, BS_output$Outlier == "outlier")$SNP, file="/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_BayeScanOutliers.txt", sep="\n")
+
+######plink######
+#use plink to generate file of only bayescan outliers
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2 \
+--extract SNPs_MissingRemoved_HWE_LD2_BayeScanOutliers.txt \
+--make-bed --recode \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_BayeScanOutliers --allow-extra-chr
+
+#########################
+#####Diversity Stats#####
+#########################
+
+######R######
+#data formatting
+library(plyr)
+library(reshape2)
+library(splitstackshape)
+library(tidyverse)
+
+#data analysis
+library(adegenet)
+library(hierfstat)
+library(dartR)
+library(stAMPP)
+library(stats)
+
+#NOTE:example code is only shown for one dataset
+
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv) 
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv
+
+#load genepop file
+SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.gen", ncode=3)
+SNPs_MissingRemoved_HWE_LD2_GP$pop #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
+#fix the pop names
+levels(SNPs_MissingRemoved_HWE_LD2_GP$pop) <- c("29W","BI","Bio","ESI","GM","IC","SI")
+
+#MAF (adegenet)
+SNPs_MissingRemoved_HWE_LD2_MAF <- data.frame(minorAllele(SNPs_MissingRemoved_HWE_LD2_GP)) %>% 
+  rownames_to_column(var="SNP") %>% 
+  rename(MAF = "minorAllele.SNPs_MissingRemoved_HWE_LD2_GP.")
+range(SNPs_MissingRemoved_HWE_LD2_MAF$MAF)
+hist(SNPs_MissingRemoved_HWE_LD2_MAF$MAF, breaks=100)
+
+#split into different genind object per pop
+IC_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[381:398,]
+ESI_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[235:298,]
+SI_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[399:472,]
+Bio_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[149:234,]
+GM_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[299:380,]
+BI_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[81:148,]
+W29_SNPs_MissingRemoved_HWE_LD2_GP <- SNPs_MissingRemoved_HWE_LD2_GP[1:80,]
+
+#Per Locus Ho, He (adegenet)
+SumOverall_SNPs_MissingRemoved_HWE_LD2_GP <- summary(SNPs_MissingRemoved_HWE_LD2_GP)
+SumIC_SNPs_MissingRemoved_HWE_LD2_GP <- summary(IC_SNPs_MissingRemoved_HWE_LD2_GP)
+SumESI_SNPs_MissingRemoved_HWE_LD2_GP <- summary(ESI_SNPs_MissingRemoved_HWE_LD2_GP)
+SumSI_SNPs_MissingRemoved_HWE_LD2_GP <- summary(SI_SNPs_MissingRemoved_HWE_LD2_GP)
+SumBio_SNPs_MissingRemoved_HWE_LD2_GP <- summary(Bio_SNPs_MissingRemoved_HWE_LD2_GP)
+SumGM_SNPs_MissingRemoved_HWE_LD2_GP <- summary(GM_SNPs_MissingRemoved_HWE_LD2_GP)
+SumBI_SNPs_MissingRemoved_HWE_LD2_GP <- summary(BI_SNPs_MissingRemoved_HWE_LD2_GP)
+Sum29W_SNPs_MissingRemoved_HWE_LD2_GP <- summary(W29_SNPs_MissingRemoved_HWE_LD2_GP)
+
+mean(SumOverall_SNPs_MissingRemoved_HWE_LD2_GP$Hobs) #mean overall per-locus Ho
+mean(SumOverall_SNPs_MissingRemoved_HWE_LD2_GP$Hexp)  #mean overall per-locus He
+
+#Test if Ho is different than He (stats)
+#IC
+bartlett.test(list(SumIC_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumIC_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) #check is variances are the same for ttest
+t.test(SumIC_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumIC_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#ESI
+bartlett.test(list(SumESI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumESI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(SumESI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumESI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#SI
+bartlett.test(list(SumSI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumSI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(SumSI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumSI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#Bio
+bartlett.test(list(SumBio_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumBio_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(SumBio_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumBio_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#GM
+bartlett.test(list(SumGM_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumGM_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(SumGM_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumGM_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#BI
+bartlett.test(list(SumBI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumBI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(SumBI_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,SumBI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+#29W
+bartlett.test(list(Sum29W_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,Sum29W_SNPs_MissingRemoved_HWE_LD2_GP$Hobs))
+t.test(Sum29W_SNPs_MissingRemoved_HWE_LD2_GP$Hexp,Sum29W_SNPs_MissingRemoved_HWE_LD2_GP$Hobs,pair=T,var.equal=F,alter="greater")
+
+#Pop specific He, Ho (adegenet)
+He_SNPs_MissingRemoved_HWE_LD2_GP <- as.data.frame(adegenet::Hs(SNPs_MissingRemoved_HWE_LD2_GP)) %>% rename(Hs = "adegenet::Hs(SNPs_MissingRemoved_HWE_LD2_GP)") %>% 
+  rownames_to_column(var="Pop") 
+Ho_SNPs_MissingRemoved_HWE_LD2_GP <- (as.data.frame(mean(SumIC_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="IC") %>% setNames(c("Ho","Pop"))) %>% 
+  rbind(as.data.frame(mean(SumESI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="ESI") %>% setNames(c("Ho","Pop")),
+        as.data.frame(mean(SumSI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="SI") %>% setNames(c("Ho","Pop")),
+        as.data.frame(mean(SumBio_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="Bio") %>% setNames(c("Ho","Pop")),
+        as.data.frame(mean(SumGM_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="GM") %>% setNames(c("Ho","Pop")),
+        as.data.frame(mean(SumBI_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="BI") %>% setNames(c("Ho","Pop")),
+        as.data.frame(mean(Sum29W_SNPs_MissingRemoved_HWE_LD2_GP$Hobs)) %>% mutate(Pop="29W") %>% setNames(c("Ho","Pop")))
+
+#Pop specific Fst (hierfstat)
+PopSpecFst_SNPs_MissingRemoved_HWE_LD2_GP <- as.data.frame(betas(SNPs_MissingRemoved_HWE_LD2_GP)$betaiovl) %>% 
+  rename(Fst="betas(SNPs_MissingRemoved_HWE_LD2_GP)$betaiovl") %>% rownames_to_column(var="Pop")
+#bootstrap popSpec Fst
+betas(SNPs_MissingRemoved_HWE_LD2_GP,
+      nboot = 10000,
+      lim=c(0.025,0.975),
+      diploid=T,
+      betaijT=F)
+
+#Overall basic stats (hierfstat)
+StatsOverall_SNPs_MissingRemoved_HWE_LD2_GP <- basic.stats(SNPs_MissingRemoved_HWE_LD2_GP)
+StatsOverall_SNPs_MissingRemoved_HWE_LD2_GP$overall
+
+#Pop specific Fis (hierfstat)
+Fis_SNPs_MissingRemoved_HWE_LD2_GP <- (as.data.frame(t(basic.stats(IC_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="IC") %>% dplyr::select(Pop,Fis)) %>% 
+  rbind(as.data.frame(t(basic.stats(ESI_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="ESI")%>% dplyr::select(Pop,Fis),
+        as.data.frame(t(basic.stats(SI_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="SI")%>% dplyr::select(Pop,Fis),
+        as.data.frame(t(basic.stats(Bio_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="Bio")%>% dplyr::select(Pop,Fis),
+        as.data.frame(t(basic.stats(GM_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="GM")%>% dplyr::select(Pop,Fis),
+        as.data.frame(t(basic.stats(BI_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="BI")%>% dplyr::select(Pop,Fis),
+        as.data.frame(t(basic.stats(W29_SNPs_MissingRemoved_HWE_LD2_GP)$overall)) %>% mutate(Pop="29W")%>% dplyr::select(Pop,Fis))
+
+SumStatsPop_SNPs_MissingRemoved_HWE_LD2_GP <- He_SNPs_MissingRemoved_HWE_LD2_GP %>% #adegenet
+  join(Ho_SNPs_MissingRemoved_HWE_LD2_GP) %>% #adegenet
+  join(PopSpecFst_SNPs_MissingRemoved_HWE_LD2_GP) %>% #hierfstat
+  join(Fis_SNPs_MissingRemoved_HWE_LD2_GP) #hierfstat
+  
+write_tsv(SumStatsPop_SNPs_MissingRemoved_HWE_LD2_GP,
+          col_names = T,
+          file="/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_SummaryStats.txt")
+
+#Pairwise Pop specific Fst (hierfstat)
+PWNeiFst_SNPs_MissingRemoved_HWE_LD2_GP <- genet.dist(SNPs_MissingRemoved_HWE_LD2_GP, method="Nei87")
+PWWCFst_SNPs_MissingRemoved_HWE_LD2_GP <- genet.dist(SNPs_MissingRemoved_HWE_LD2_GP, method="WC84")
+
+#Pairwise Pop specific Fst (StAMMP)
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP <- stamppFst(stamppConvert(SNPs_MissingRemoved_HWE_LD2_GP, type="genlight"),  #linux only
+                                                            nboots = 100, 
+                                                            percent = 95, 
+                                                            nclusters = (detectCores()-40))
+
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP$Fsts
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP$Pvalues
+
+#convert data to long format
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst <- PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP$Fsts
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Pval <- PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP$Pvalues
+
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst_long <- as.data.frame(melt(PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst)) %>% 
+  rename(Pop1 = Var1, Pop2=Var2, Fst=value)
+Fst_MAF001_R75_n475_RandomSNP_HWE_Fst_long <- as.data.frame(melt(PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Pval)) %>% 
+  rename(Pop1 = Var1, Pop2=Var2, Pval=value)
+
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst_long <- Fst_MAF001_R75_n475_RandomSNP_HWE_Fst_long %>% 
+  full_join(Fst_MAF001_R75_n475_RandomSNP_HWE_Fst_long) %>% 
+  mutate(Fst = round(Fst, 5)) %>% 
+  na.omit() %>% 
+  mutate(FstLabel = case_when(Pval < 0.05 ~ paste0(Fst,"*"),
+                              .default = Fst))
+
+#heatmap of PW Fst
+PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst_plot <- ggplot(PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst_long, 
+                                                aes(x = Pop2, y = ordered(Pop1, levels = rev(levels(Pop2))), fill = Pval)) +
+  geom_tile() +
+  geom_text(aes(label=Fst))+
+  scale_fill_distiller(palette = "Spectral", na.value = "white") +
+  ggtitle(expression(MAF001_R75_n475_RandomSNP_HWE~~F[ST])) +
+  labs(fill = "p value") +
+  theme_bw() +
+  theme(plot.title = element_text(size=22),
+        legend.position = "right", 
+        legend.title = element_text(size=22), 
+        legend.text = element_text(size=15),
+        legend.key = element_blank(), 
+        axis.text.x = element_text(size = 22),
+        axis.text.y = element_text(size = 22),
+        axis.title= element_blank(), 
+        plot.margin = unit(c(5,5,7,5), "mm"),
+        panel.border = element_rect(linewidth = 1),
+        panel.grid.major=element_blank()) +
+  NULL
+
+#Nei's D (StAMPP)
+NeiDSNPs_MissingRemoved_HWE_LD2 <- stamppNeisD(stamppConvert(SNPs_MissingRemoved_HWE_LD2_GP, type="genlight"),  #linux only
+                                                nboots = 100, 
+                                                percent = 95, 
+                                                nclusters = (detectCores()-40))
+
+#Genomic Relatedness Matrix (StAMPP)
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read_delim("C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt",
+                                                                                col_names = c("Indiv","Pop"))
+
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim(paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.fam"),sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv) 
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv
+#load genepop file
+SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop(file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.gen"), ncode=3)
+SNPs_MissingRemoved_HWE_LD2_GP$pop #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
+#fix the pop names
+levels(SNPs_MissingRemoved_HWE_LD2_GP$pop) <- c("29W","BI","Bio","ESI","GM","IC","SI")
+
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- stamppGmatrix(stamppConvert(SNPs_MissingRemoved_HWE_LD2_GP, type="genlight"))
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- data.frame(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix) #convert to DF
+colnames(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix) <- rownames(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix) #set column names to match rownames
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- SNPs_MissingRemoved_HWE_LD2_RelatedMatrix %>% 
+  rownames_to_column(var = "IID") %>% 
+  relocate(IID) #set IID as the first column
+
+#save and reload on laptop
+write_delim(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix,
+            delim = " ",col_names=T,
+          file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2_RelatedMatrix.csv"))
+
+#load matrix on laptop
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- read_delim(file = "C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/ModiolusRAD/data/SNPs_MissingRemoved_HWE_LD2_RelatedMatrix.csv") #if needed on new computer
+#load PopIndiv on laptop
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read_delim("C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt",
+                                                                                col_names = c("Indiv","Pop"))
+
+#keep only lower triangle of matrix
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix[,2:473][upper.tri(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix[,2:473])] <- NA
+
+#set column with IID
+SNPs_MissingRemoved_HWE_LD2_Related_Long <- SNPs_MissingRemoved_HWE_LD2_RelatedMatrix %>% 
+  dplyr::rename(Indiv = IID) %>% 
+  full_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv) %>% 
+  relocate(c("Pop","Indiv")) %>% 
+  dplyr::rename(Indiv1 = Indiv) %>% 
+  pivot_longer(cols = 3:ncol(.), names_to = "Indiv2", values_to = "Relatedness") %>% 
+  filter(!is.na(Relatedness))
+
+#histogram
+histogram <- ggplot(SNPs_MissingRemoved_HWE_LD2_Related_Long, aes(x = Relatedness)) +
+  # geom_histogram(colour = "white",fill="grey40",bins=100)+
+  geom_histogram(binwidth=0.01)+
+  theme_bw() + 
+  theme(panel.grid = element_blank());histogram
+  
+ggheatmap(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix)
+
+
+# Hierarchical clustering dendrogram
+hc <- hclust(dist(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix))
+dhc <- as.dendrogram(hc)
+data <- dendro_data(dhc, type = "rectangle")
+
+labels <- data$labels %>% 
+  rename(Indiv = label) %>% 
+  left_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv)
+
+p <- ggplot(data$segments) + 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend), linewidth=0.1) + 
+  # geom_text(data = labels, 
+  #           aes(x=x,y=y,label=Indiv, colour = Pop), 
+  #           size=0.7,
+  #           hjust=0)+
+  geom_jitter(data = labels,
+             aes(x=x,y=y,shape=Pop,colour = Pop,fill=Pop),
+             size=1,
+             height=0.05
+             )+
+  scale_colour_manual(values=palette)+
+  scale_fill_manual(values=palette)+
+  scale_shape_manual(values=shapes)+
+  coord_flip() + 
+  scale_y_reverse(expand = c(0.2, 0)) +
+  theme_bw() + 
+  theme(panel.grid=element_blank());p
+
+
+##########per individual het##########
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim(paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.fam"),sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv) 
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv
+#load genepop file
+SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop(file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.gen"), ncode=3)
+SNPs_MissingRemoved_HWE_LD2_GP$pop #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
+#fix the pop names
+levels(SNPs_MissingRemoved_HWE_LD2_GP$pop) <- c("29W","BI","Bio","ESI","GM","IC","SI")
+
+SNPs_MissingRemoved_HWE_LD2_GL <- gi2gl(SNPs_MissingRemoved_HWE_LD2_GP)
+IndHetRes_SNPs_MissingRemoved_HWE_LD2 <- gl.report.heterozygosity(SNPs_MissingRemoved_HWE_LD2_GL, method="ind")
+IndHet_SNPs_MissingRemoved_HWE_LD2 <- IndHetRes_SNPs_MissingRemoved_HWE_LD2 %>% 
+  dplyr::rename(Indiv = ind.name,
+         HomRef = f.hom.ref,
+         HomAlt = f.hom.alt) %>% 
+  dplyr::mutate(RowSum = rowSums((.[,2:4]), na.rm=T)) %>% 
+  full_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv) %>% 
+  relocate("Pop", .before = "Indiv") %>% 
+  mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+  
+#anova to see if pops differ in het
+HetANOVA <- aov(Ho ~ Pop, data = IndHet_SNPs_MissingRemoved_HWE_LD2)
+
+#are resid normal? skewed
+hist(HetANOVA$residuals)
+car::qqPlot(HetANOVA$residuals, id=F)
+shapiro.test(HetANOVA$residuals) #not normal!
+
+#use Kruskal-Wallis test - non parametric anova
+KW_HMHet <- kruskal.test(Ho ~ Pop, data = IndHet_SNPs_MissingRemoved_HWE_LD2)
+DT_HMHet <- dunnTest(Ho ~ Pop, data = IndHet_SNPs_MissingRemoved_HWE_LD2, method="bonferroni")
+DT_HMHet_res <- DT_HMHet$res
+#compact letter display for plot to show significance groups
+cld <- cldList(comparison = DT_HMHet_res$Comparison,
+               p.value = DT_HMHet_res$P.adj,
+               threshold=0.05)[1:2]
+
+
+##plot of het by pop, including cld
+HetPlot <- ggplot(IndHet_SNPs_MissingRemoved_HWE_LD2, aes(x=Pop, y=Ho)) +
+  geom_boxplot(aes(fill=Pop),colour="grey10", linewidth=0.3) +
+  ylab("Observed Heterozygosity") +
+  annotate(geom="text", x="IC", y=0.078, label = "b",size=2.5) + #IC
+  annotate(geom="text", x="ESI", y=0.0835, label = "ac",size=2.5) + #ESI
+  annotate(geom="text", x="SI", y=0.0795, label = "b",size=2.5) + #SI
+  annotate(geom="text", x="Bio", y=0.0835, label = "c",size=2.5) + #Bio
+  annotate(geom="text", x="GM", y=0.086, label = "ab",size=2.5) + #GM
+  annotate(geom="text", x="BI", y=0.0815, label = "abc",size=2.5) + #BI
+  annotate(geom="text", x="29W", y=0.0805, label = "ab",size=2.5) + #29W
+  scale_fill_manual(values=palette)+
+  ggtitle("Observed heterozygosity per population,\nSNPs_MissingRemoved_HWE_LD2, n=8414")+
+  theme_bw() +
+  theme(plot.title=element_text(size = 10),
+        legend.position = "right", 
+        legend.title = element_blank(),
+        legend.text = element_text(size=8),
+        legend.key = element_blank(), 
+        axis.text = element_text(size = 8), 
+        axis.title.x = element_text(size=10, margin = margin(t=6,r=0,b=0,l=0)),
+        axis.title.y = element_text(size=10, margin = margin(t=0,r=8,b=0,l=0)),
+        axis.title=element_text(size = 10), 
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),
+        panel.grid=element_blank()) +
+  NULL
+ggsave(HetPlot, file="C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/Figures/HetPerPop_30Oct2024.pdf",
+       height=5,width=8,unit="in")
+
+
+
+
+
+########################
+##########PCAs##########
+########################
+
+#NOTE: Code for only one PCA example is shown, but the same code was used for all PCAs in the manuscript
+#colours for plotting
+palette <- c("IC" = "#1B9E77","ESI" = "#D95F02","29W" = "#7570B3","BI" = "#E7298A","GM" = "#66A61E","Bio" = "#E6AB02","SI" = "#666666","South"="black")
+shapes <-   c("IC" = 21,"ESI" = 24,"29W" = 21,"BI" = 22,"GM" = 25,"Bio" = 23,"SI" = 22)
+
+######R######
+#data formatting
+library(plyr)
+library(reshape2)
+library(splitstackshape)
+library(tidyverse)
+
+#data analysis
+library(pcadapt)
+
+##### Load Metadata #####
+#convert ped data to genepop using PGDspider
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv) 
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv
+
+#read in metadata
+AllSample_metadata <- read.csv("/data/AllMetadata.csv") %>% 
+  dplyr::select(SampleID,Pop,Sex,Total_Age) %>% 
+  dplyr::rename(ID=SampleID)
+
+#read in SNP names from the .bim file
+SNPs_MissingRemoved_HWE_LD2_SNPs <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bim",sep="",header=F) %>% 
+  dplyr::rename(SNP=V2) %>% 
+  dplyr::select(SNP)
+SNPs_MissingRemoved_HWE_LD2_SNPs <- SNPs_MissingRemoved_HWE_LD2_SNPs[[1]]
+
+##### Load Genetic Data #####
+SNPs_MissingRemoved_HWE_LD2_PCAdapt <- read.pcadapt(input = "/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed", type="bed")
+
+#Run PCadapt
+PCA_SNPs_MissingRemoved_HWE_LD2 <- pcadapt(SNPs_MissingRemoved_HWE_LD2_PCAdapt, K=2, min.maf=0.01)
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option = "screeplot") #k=2 is the optimal K
+plot(PCA_SNPs_MissingRemoved_HWE_LD2, option = "scores", pop = SNPs_MissingRemoved_HWE_LD2_PopIndiv$Pop)
+
+(PCA_SNPs_MissingRemoved_HWE_LD2$singular.values[1]^2)*100 #PC1 25.2% of explained variance 
+(PCA_SNPs_MissingRemoved_HWE_LD2$singular.values[2]^2)*100 #PC2 16.0% of explained variance 
+
+summary(PCA_SNPs_MissingRemoved_HWE_LD2)
+
+PCA_SNPs_MissingRemoved_HWE_LD2_Summary <- as.data.frame(SNPs_MissingRemoved_HWE_LD2_SNPs) %>% 
+  dplyr::rename(SNP=SNPs_MissingRemoved_HWE_LD2_SNPs) %>% 
+  mutate(AF = PCA_SNPs_MissingRemoved_HWE_LD2$af,
+         MAF = PCA_SNPs_MissingRemoved_HWE_LD2$maf,
+         Chi = PCA_SNPs_MissingRemoved_HWE_LD2$chi2.stat,
+         Pval = PCA_SNPs_MissingRemoved_HWE_LD2$pvalues,
+         Mahal = PCA_SNPs_MissingRemoved_HWE_LD2$stat)
+
+#output coordinates for individuals
+PCA_SNPs_MissingRemoved_HWE_LD2_plotdata <- as.data.frame(PCA_SNPs_MissingRemoved_HWE_LD2$scores) #extract individual coordinates
+PCA_SNPs_MissingRemoved_HWE_LD2_plotdata$ID <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv #set ID
+PCA_SNPs_MissingRemoved_HWE_LD2_plotdata$Pop <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Pop
+colnames(PCA_SNPs_MissingRemoved_HWE_LD2_plotdata)  <- c("Axis1","Axis2","ID","Pop")
+PCA_SNPs_MissingRemoved_HWE_LD2_plotdata <- PCA_SNPs_MissingRemoved_HWE_LD2_plotdata %>% #add in sex and age info for plotting
+  left_join(AllSample_metadata) 
+
+#plot
+PCA_SNPs_MissingRemoved_HWE_LD2_plot <- ggplot(PCA_SNPs_MissingRemoved_HWE_LD2_plotdata2, aes(x=Axis1, y=Axis2)) +
+  geom_hline(linewidth=1, colour = "black", yintercept = 0) + #horizontal line through the origin
+  geom_vline(linewidth=1, colour = "black", xintercept = 0) + #vertical line through the origin
+  geom_point(size=3, alpha = 0.7,
+             aes(
+               shape = Pop,
+               fill = Pop,
+               colour = Pop #can optionally colour by Age or Sex
+             )) + 
+  xlab("\nPC1 (25.2%)")   +
+  ylab("PC2 (16.0%)\n")   +
+  scale_shape_manual(values = shapes) +
+  scale_fill_manual(values=palette)+
+  scale_colour_manual(values=palette)+
+  ggtitle("PCA_SNPs_MissingRemoved_HWE_LD2, n=8414 SNPs")+
+  theme_bw() +
+  theme(plot.title=element_text(size = 10),
+        legend.position = "right", 
+        legend.title=element_blank(),
+        legend.text = element_text(size=12),
+        legend.key = element_blank(),
+        legend.margin=margin(0,0,0,0),
+        legend.box.margin=margin(r=20),
+        axis.text = element_text(size = 8), 
+        axis.title.x = element_text(size=10, vjust =3),
+        axis.title.y = element_text(size=10, vjust=-3),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin = unit(c(1,1,0,0), 'lines'), #t,r,b,l
+        panel.grid=element_blank()) +
+  NULL
+ggsave(PCA_SNPs_MissingRemoved_HWE_LD2_plot, 
+       file = "/data/05_Filtered/Aligned/MissingRemoved/PCA_SNPs_MissingRemoved_HWE_LD2_plot.pdf", 
+       height = 10,width = 16, units = "in", dpi=1200)
+
+
+#########################
+########Admixture########
+#########################
+
+
+########################
+##########RDAs##########
+########################
+
+

@@ -1,0 +1,81 @@
+###################################
+####### Trim to equal length  #####
+###################################
+
+#create and load conda environment, install cutadapt
+conda create -n HM_RAD_CUTADAPT_MVW -c bioconda
+conda activate HM_RAD_CUTADAPT_MVW
+conda install -c conda-forge -c bioconda cutadapt  
+
+#Trim each read to 140bp and remove the first 2 bases from each
+
+## set up ind file - list of all the Library names from the raw files
+ls data/00_RawData/*_R1.fastq.gz | sed 's/.*ata\///' | sed 's/.fastq.gz//' | sed 's/_R1//' > ind_name.txt
+
+#set up one command to trim all library files, run from within RawDataDirectory
+cat ind_name.txt | parallel "cutadapt \
+j 0 \
+-u 2 \
+-U 2 \
+--length 140 \
+--minimum-length 140 \
+-a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
+-A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT \
+-o data/01_TrimmedData/{}_R1_trim.fastq.gz \
+-p data/01_TrimmedData/{}_R2_trim.fastq.gz \
+--json CA_report \
+data/00_RawData/{}_R1.fastq.gz \
+data/00_RawData/{}_R2.fastq.gz"
+
+#rename files after trimming
+NS.2207.001.NEBNext_Index_1.Library1_R1_trim -> NS_2207_001_001_R1_trim
+
+#change first part of all filenames
+find . -type f -exec rename 's/NS.2207.001.NEBNext_/NS_2207_001_/g' {} +
+
+#change second part of all filenames
+for LIB in 1 2 3 4 5 6 7 8 9;
+do
+find . -type f -exec rename "s/Index_${LIB}.Library${LIB}/Lib00${LIB}/g" {} +
+done
+
+for LIB in 10;
+do
+find . -type f -exec rename "s/Index_${LIB}.Library${LIB}/Lib0${LIB}/g" {} +
+done
+
+########################
+#######FastQC###########
+########################
+
+#activate conda environment
+conda activate FASTQC
+
+#from within data/01_TrimmedData, create new Directory for FastQC results
+mkdir FASTQCResults
+output=FASTQCResults
+
+for file in *.fastq.gz
+do
+fastqc -f fastq -t 20 -o ${output} ${file}
+done
+
+###################################
+####### Stacks process_radtags ####
+###################################
+
+#activate conda environment
+conda activate HM_RAD_PROCESSRADTAGSMVW_2
+
+#do for each library individually, one example shown
+date
+process_radtags \
+-1 data/01_TrimmedData/NS_2207_001_Lib001_R1_trim.fastq.gz \
+-2 data/01_TrimmedData/NS_2207_001_Lib001_R2_trim.fastq.gz  \
+-o data/02_Trimmed_DemultiplexedData \
+-b data/97_Adapters/RADAdapt_Lib001.txt \
+-i 'gzfastq' -e 'sbfI' -r -c -q \
+-y 'gzfastq' --barcode_dist_1 2 --threads 32 --bestrad
+date
+
+

@@ -1,0 +1,693 @@
+###################################
+####### Trim to equal length  #####
+###################################
+conda create -n HM_RAD_CUTADAPT_MVW -c bioconda
+conda activate HM_RAD_CUTADAPT_MVW
+conda install -c conda-forge -c bioconda cutadapt  
+
+###FINAL TRIM###
+#Following process_radtags test, want to trim each read to 140bp and remove the first 2 bases from each
+## set up ind file - list of all the Library names from the raw files
+ls ./00_HM_RAD_RawData/*_R1.fastq.gz | sed 's/.*ata\///' | sed 's/.fastq.gz//' | sed 's/_R1//' > ind_name.txt
+
+#set up one command to trim all library files
+cat ind_name.txt | parallel "cutadapt \
+j 0 \
+-u 2 \
+-U 2 \
+--length 140 \
+--minimum-length 140 \
+-a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
+-A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT \
+-o ./02_HM_Trimmed/{}_R1_trim.fastq.gz \
+-p ./02_HM_Trimmed/{}_R2_trim.fastq.gz \
+--json CA_report \
+./00_HM_RAD_RawData/{}_R1.fastq.gz \
+./00_HM_RAD_RawData/{}_R2.fastq.gz"
+
+#rename files after trimming
+NS.2207.001.NEBNext_Index_1.Library1_R1_trim -> NS_2207_001_001_R1_trim
+
+#change first part of all filenames
+find . -type f -exec rename 's/NS.2207.001.NEBNext_/NS_2207_001_/g' {} +
+
+#change second part of all filenames
+for LIB in 1 2 3 4 5 6 7 8 9;
+do
+find . -type f -exec rename "s/Index_${LIB}.Library${LIB}/Lib00${LIB}/g" {} +
+done
+
+for LIB in 10;
+do
+find . -type f -exec rename "s/Index_${LIB}.Library${LIB}/Lib0${LIB}/g" {} +
+done
+
+########################
+#######FastQC###########
+########################
+#from within 02_HM_Trimmed
+conda activate FASTQC
+
+mkdir FASTQCResults
+output=FASTQCResults
+
+for file in *.fastq.gz
+do
+fastqc -f fastq -t 20 -o ${output} ${file}
+done
+
+###################################
+####### Stacks process_radtags ####
+###################################
+###FINAL process_radtags###
+##move forward with the parameters from Test G - trimmed to 140bp, first 2 bases removed from each read
+#32 is the max number of threads the program can use
+#note -q is a quality threshold default, removes reads with low PHRED scores
+conda activate HM_RAD_PROCESSRADTAGSMVW_2
+
+for LIB in 001 002 003 004 005 006 007 008 009 010;
+do
+process_radtags \
+-1 /media/brendan/A/Mallory/02_HM_Trimmed/"NS_2207_001_Lib${LIB}_R1_trim.fastq.gz" \
+-2 /media/brendan/A/Mallory/02_HM_Trimmed/"NS_2207_001_Lib${LIB}_R2_trim.fastq.gz"  \
+-o /media/brendan/A/Mallory/03_HM_Trim_Demultiplexed \
+-b /media/brendan/A/Mallory/97_HM_RAD_Adapters/"RADAdapt_Lib${LIB}.txt" \
+-i 'gzfastq' -e 'sbfI' -r -c -q \
+-y 'gzfastq' --barcode_dist_1 2 --threads 50 --bestrad
+done
+##NOTE## Issue with this: overwrites the .log file for each library, will need to do each separately to get the individual values
+
+date
+process_radtags \
+-1 /media/brendan/A/Mallory/02_HM_Trimmed/NS_2207_001_Lib010_R1_trim.fastq.gz \
+-2 /media/brendan/A/Mallory/02_HM_Trimmed/NS_2207_001_Lib010_R2_trim.fastq.gz  \
+-o /media/brendan/A/Mallory/03_Lib010 \
+-b /media/brendan/A/Mallory/97_HM_RAD_Adapters/RADAdapt_Lib010.txt \
+-i 'gzfastq' -e 'sbfI' -r -c -q \
+-y 'gzfastq' --barcode_dist_1 2 --threads 32 --bestrad
+date
+
+
+######################
+###### bwa-mem2 ######
+######################
+# 00_HM_RAD_RawData - raw data divided by library
+# 03_HM_Trim_Demultiplexed - trimmed and demultiplexed data
+# 97_HM_RAD_Adapters - individual adapters for demultiplexing
+# 55_Wengan_Genome - Nick
+
+#create conda environment
+conda create -n HM_RAD_BWAMEM -c bioconda
+conda activate HM_RAD_BWAMEM
+conda install -c conda-forge -c bioconda bwa-mem2
+conda install -c conda-forge -c bioconda samtools
+
+#make file lisitng individuals and manually remove the 5 to exclude
+ls *rem.1.fq.gz | sed 's/.rem.1.fq.gz//' > ind.txt 
+#using the .rem (removed) files or the code would include INDIV and INDIV.rem, etc (would duplicate individual names)
+# /media/brendan/A/Mallory/03_HM_Trim_Demultiplexed/ind.txt --> just a list of individual names with the 5 bad ones removed
+
+#####Nick's Wengan genome#####
+#Nick used Wengan to assemble a genome from WG reads and nanopore long-reads
+#genome is in /media/brendan/A/Mallory/55_Wengan_Genome/HM_wenganA.fasta
+
+####start by indexing the genome using bwa-mem2 and samtools####
+bwa-mem2 index HM_wenganA.fasta
+samtools faidx HM_wenganA.fasta #needed for bcftools mpileup
+
+####align reads to indexed genome and coordinate sort####
+#NOTE do this from within 03_HM_Trim_Demultiplexed
+SAMPLE_FILE="/media/brendan/A/Mallory/03_HM_Trim_Demultiplexed/ind.txt"
+GENOME="/media/brendan/A/Mallory/55_Wengan_Genome/HM_wenganA.fasta"
+
+#explanation of 'while read loop' etc. https://stackoverflow.com/questions/62668968/how-read-line-in-while-loop-works)
+# -t threads, -R read group header line? ID is read group ID, SM is sample, LB is DNA prep lib ID, 
+# samtools this pipes the bwa-mem2 output directly to samtools to sort -T = prefix, -@ is number of threads, -m memory per thread
+
+while read ind;
+do echo $ind;
+bwa-mem2 mem -t 30 -R "@RG\tID:$ind\tSM:$ind\tLB:Modiolus" $GENOME $ind\.1.fq.gz  $ind\.2.fq.gz | samtools sort -o /media/brendan/A/Mallory/06_WenganAlignment/Aligned/$ind\.sorted.bam -T $ind -@ 30 -m 2G ;
+done < ind.txt
+
+#index all files
+samtools index -M *.bam
+
+#make sure ID and SM readgroup are unique for each sample so mpileup knows to treat them as different samples
+
+####check RG for a few inds just to make sure the RGs are correct####
+samtools view -H 29W2241959.sorted.bam | grep '^@RG'
+samtools view -H GM2242359.sorted.bam | grep '^@RG'
+samtools view -H SI2242514.sorted.bam | grep '^@RG'
+
+####check alignment stats using flagstat####
+while read ind;
+do echo $ind;
+echo $ind >> Flagstats_Output.txt
+samtools flagstat $ind.sorted.bam >> Flagstats_Output.txt
+done < /media/brendan/A/Mallory/03_HM_Trim_Demultiplexed/ind.txt
+
+#Testing including a mapq filter >= 30 after aligning and sorting
+while read ind;
+do echo $ind;
+samtools view -h -q 30 -@ 60 $ind\.sorted.bam | samtools sort -o /media/brendan/A/Mallory/06_WenganAlignment/Aligned/Q30/$ind\.Q30.sorted.bam -T $ind -@ 60 -m 2G 
+done < ind.txt
+
+#index all files, move into Q30 directory first
+samtools index -M *.bam
+
+#check number of reads
+samtools view -c 29W2241959.sorted.bam #7144352 original
+samtools view -c 29W2241959.Q30.sorted.bam #4353726 filtered Q30
+samtools view -c 29W2241959.Q20.sorted.bam #4656893 filtered Q20 (deleted)
+
+######################
+####### Stacks #######
+######################
+
+conda create -n HM_RAD_GSTACKS -c bioconda
+conda activate HM_RAD_GSTACKS
+conda install -c conda-forge -c bioconda stacks 
+
+###########CALL SNPS - gstacks on reads aligned to Nick's genome, using the same params as denovo where applicable, else default###########
+gstacks \
+-I /media/brendan/A/Mallory/06_WenganAlignment/Aligned \
+-S ".sorted.bam" \
+-M /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--rm-pcr-duplicates \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks
+
+###########extract summary stats###########
+#coverage following gstacks
+stacks-dist-extract gstacks.log.distribs effective_coverages_per_sample > /media/brendan/A/Mallory/06_WenganAlignment/gStacks/Avg_coverage_per_sample_paired.csv
+
+##phasing rates per sample - expect a high number
+cat gstacks.log | grep -B 2 -A 3 '^Genotyped'
+stacks-dist-extract gstacks.log.distribs phasing_rates_per_sample > /media/brendan/A/Mallory/06_WenganAlignment/gStacks/Phasing_per_sample_paired.csv
+
+###########FILTER SNPS - next, populations filtering to match the denovo SNPs###########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacks \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks/MAF001_R75_RandomSNP_Aligned \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--min-populations 7 \
+--min-samples-per-pop 0.75 \
+--min-maf 0.01 \
+--write-random-snp \
+--plink --vcf --vcf-all
+
+###### NO FILTER SNPS - no filters for generating SFS and running stairway plot from called SNPs rather than raw files, 472 inds########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacks \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks/RandomSNP_Aligned_NoFilter \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_NoMissing_n472.txt \
+--threads 20 \
+--write-random-snp \
+--plink --vcf
+
+###### NO FILTER SNPS 2 - no filters using all 475 indivs instead of 472########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacks \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks/RandomSNP_Aligned_NoFilter2 \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--write-random-snp \
+--plink --vcf
+
+###### NO FILTER SNPS 3 - no MAF filters using all 475 indivs instead of 472########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacks \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks/RandomSNP_Aligned_NoFilter3 \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--min-populations 7 \
+--min-samples-per-pop 0.75 \
+--threads 60 \
+--write-random-snp \
+--plink --vcf
+
+###### NO FILTER SNPS 4 - MAF filter only 475 indivs instead of 472########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacks \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacks/RandomSNP_Aligned_NoFilter4 \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--min-maf 0.01 \
+--threads 60 \
+--write-random-snp \
+--plink --vcf
+
+###########Populations output Summary Stats - from the folder with the populations output##########
+##number of polymorphic loci overall
+cat populations.sumstats.tsv | grep -v '^#' | cut -f 1 | sort -n -u | wc -l  
+
+stacks-dist-extract populations.log.distribs loci_per_sample_prefilters > loci_per_sample_prefiltered.csv
+stacks-dist-extract populations.log.distribs loci_per_sample > loci_per_sample_postfiltered.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs variant_sites_per_sample > snps_per_sample_postfilters.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_prefilters >  samples_per_loc_prefilters.csv #valid samples matched to a catalog locus pre-filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_postfilters >  samples_per_loc_postfilters.csv #valid samples matched to a catalog locus post-filtering
+stacks-dist-extract populations.log.distribs snps_per_loc_prefilters > snps_per_loc_prefilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+stacks-dist-extract populations.log.distribs snps_per_loc_postfilters > snps_per_loc_postfilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+
+############Read Depth per Locus VCFtools##########
+conda activate HM_RAD_DENOVOMAP
+
+#pull out the depths per indiv
+bcftools query -f '%CHROM %POS %ID DPs:[\t%DP]\n' MAF001_R75_RandomSNP_Aligned.vcf > ReadDepthPerSNPPerIndiv.txt
+#pull out sample names in order
+bcftools query -l MAF001_R75_RandomSNP_Aligned.vcf > VCFSampleIDs.txt
+
+###############Q30 filtered reads
+###########CALL SNPS - gstacks on reads aligned to Nick's genome, using the same params as denovo where applicable, else default###########
+conda activate HM_RAD_GSTACKS
+
+gstacks \
+-I /media/brendan/A/Mallory/06_WenganAlignment/Aligned/Q30 \
+-S ".Q30.sorted.bam" \
+-M /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--rm-pcr-duplicates \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacksQ30
+
+###########extract summary stats###########
+#coverage following gstacks
+stacks-dist-extract gstacks.log.distribs effective_coverages_per_sample > /media/brendan/A/Mallory/06_WenganAlignment/gStacksQ30/Avg_coverage_per_sample_paired.csv
+
+##phasing rates per sample - expect a high number
+cat gstacks.log | grep -B 2 -A 3 '^Genotyped'
+stacks-dist-extract gstacks.log.distribs phasing_rates_per_sample > /media/brendan/A/Mallory/06_WenganAlignment/gStacksQ30/Phasing_per_sample_paired.csv
+
+###########FILTER SNPS - next, populations filtering to match the denovo SNPs###########
+populations \
+-P /media/brendan/A/Mallory/06_WenganAlignment/gStacksQ30 \
+-O /media/brendan/A/Mallory/06_WenganAlignment/gStacksQ30/MAF001_R75_RandomSNP_Aligned \
+--popmap /media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--min-populations 7 \
+--min-samples-per-pop 0.75 \
+--min-maf 0.01 \
+--write-random-snp \
+--plink --vcf --vcf-all
+
+###########Populations output Summary Stats - from the folder with the populations output##########
+##number of polymorphic loci overall
+cat populations.sumstats.tsv | grep -v '^#' | cut -f 1 | sort -n -u | wc -l  
+
+stacks-dist-extract populations.log.distribs loci_per_sample_prefilters > loci_per_sample_prefiltered.csv
+stacks-dist-extract populations.log.distribs loci_per_sample > loci_per_sample_postfiltered.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs variant_sites_per_sample > snps_per_sample_postfilters.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_prefilters >  samples_per_loc_prefilters.csv #valid samples matched to a catalog locus pre-filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_postfilters >  samples_per_loc_postfilters.csv #valid samples matched to a catalog locus post-filtering
+stacks-dist-extract populations.log.distribs snps_per_loc_prefilters > snps_per_loc_prefilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+stacks-dist-extract populations.log.distribs snps_per_loc_postfilters > snps_per_loc_postfilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+
+############Read Depth per Locus VCFtools##########
+conda activate HM_RAD_DENOVOMAP
+
+#pull out the depths per indiv
+bcftools query -f '%CHROM %POS %ID DPs:[\t%DP]\n' populations.snps.vcf > ReadDepthPerSNPPerIndiv.txt
+#pull out sample names in order
+bcftools query -l populations.snps.vcf > VCFSampleIDs.txt
+
+
+
+######################
+##### Filtering ######
+######################
+######R######
+library("tidyverse")
+library("gridExtra")
+wd <- '/media/brendan/A/Mallory/'
+
+#set palette for plots
+palette <- c("IC" = "#1B9E77","ESI" = "#D95F02","29W" = "#7570B3",
+             "BI" = "#E7298A","GM" = "#66A61E","Bio" = "#E6AB02","SI" = "#666666")
+
+#population metadata
+pops <- read.delim('/media/brendan/A/Mallory/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt', header=F) %>% 
+  rename(Indiv=V1,
+         Pop=V2)
+         
+WenganStacks <- '/media/brendan/A/Mallory/06_WenganAlignment/gStacks/'
+
+#loci per sample
+Wengan_RandomSNP75_loci_per_sample <- read.delim(paste0(WenganStacks,'MAF001_R75_RandomSNP_Aligned/loci_per_sample_prefiltered.csv'), comment.char = '#') %>% 
+  rename(Indiv = sample,
+         Pre_Total = n_loci,
+         Pre_Present = present_loci,
+         Pre_missing = missing_loci,
+         Pre_FreqMissing = frequency_missing) %>% 
+  full_join(read.delim(paste0(WenganStacks,'MAF001_R75_RandomSNP_Aligned/loci_per_sample_postfiltered.csv'), comment.char = '#') %>% 
+              rename(Indiv = sample,
+                     Post_Total = n_loci,
+                     Post_Present = present_loci,
+                     Post_missing = missing_loci,
+                     Post_FreqMissing = frequency_missing)) %>% 
+  left_join(pops)
+
+#SNPs per sample
+Wengan_RandomSNP75_snps_per_sample <- read.delim(paste0(WenganStacks,'MAF001_R75_RandomSNP_Aligned/snps_per_sample_postfilters.csv'), comment.char = '#') %>% 
+  rename(Indiv=sample,
+         Post_TotalSNPs = n_sites,
+         Post_PresentSNPs = present_sites,
+         Post_MissingSNPs = missing_sites,
+         Post_FreqMissing = frequency_missing) %>% 
+  left_join(pops)
+
+#number of samples by locus count
+Wengan_RandomSNP75_samples_per_locus <- read.delim(paste0(WenganStacks,'MAF001_R75_RandomSNP_Aligned/samples_per_loc_prefilters.csv'), comment.char = '#') %>% 
+  rename(NumSamples = n_samples,
+         Pre_LocusCount = n_loci) %>% 
+  full_join(read.delim(paste0(WenganStacks,'MAF001_R75_RandomSNP_Aligned/samples_per_loc_postfilters.csv'), comment.char = '#') %>% 
+              rename(NumSamples = n_samples,
+                     Post_LocusCount = n_loci))
+
+# plots for Loci per sample and SNPs per sample 
+Wengan_RandomSNP75_PreMissingLoci_DotPlot <- ggplot(data = Wengan_RandomSNP75_loci_per_sample %>% 
+                                                      mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                                    aes(x=Pre_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(Wengan_RandomSNP75_loci_per_sample$Pre_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0.9,0.98),breaks=seq(0.9,0.98,0.05))+
+  xlab('Frequency of Missing Loci') + 
+  ylab("Sample") +
+  ggtitle("Before Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+
+Wengan_RandomSNP75_PostMissingLoci_DotPlot <- ggplot(data = Wengan_RandomSNP75_loci_per_sample %>% 
+                                                mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                              aes(x=Post_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(Wengan_RandomSNP75_loci_per_sample$Post_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0,0.5),breaks=seq(0,0.5,0.1))+
+  xlab('Frequency of Missing Loci') + 
+  ylab("Sample") +
+  ggtitle("After Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+
+ggsave(grid.arrange(Wengan_RandomSNP75_PreMissingLoci_DotPlot,Wengan_RandomSNP75_PostMissingLoci_DotPlot, nrow=1), 
+       file = paste0(WenganStacks,"MAF001_R75_RandomSNP_Aligned/MissingLoci_per_sample_plot.pdf"), 
+       height = 8,width = 16, units = "in")
+
+
+Wengan_RandomSNP75_PostMissingSNP_DotPlot <- ggplot(data = Wengan_RandomSNP75_snps_per_sample %>% 
+                                               mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                             aes(x=Post_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(Wengan_RandomSNP75_snps_per_sample$Post_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0,0.55),breaks=seq(0,0.55,0.1))+
+  xlab('Frequency of Missing SNP') + 
+  ylab("Sample") +
+  ggtitle("After Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+
+ggsave(grid.arrange(Wengan_RandomSNP75_PostMissingSNP_DotPlot, nrow=1), 
+       file = paste0(WenganStacks,"/MAF001_R75_RandomSNP_Aligned/MissingSNP_per_sample_plot.pdf"), 
+       height = 8,width = 16, units = "in")
+
+#Total Read Depth Per SNP#
+#this is sum of all read depths per individual for each SNP
+Wengan_MAF001_R75_RandomSNP_Aligned_Depth <- read.delim("/media/brendan/A/Mallory/06_WenganAlignment/gStacks/MAF001_R75_RandomSNP_Aligned/ReadDepthPerSNPPerIndiv.txt",header=F,na.strings = ".")
+Wengan_MAF001_R75_RandomSNP_Aligned_SampleIDs <- read.delim("/media/brendan/A/Mallory/06_WenganAlignment/gStacks/MAF001_R75_RandomSNP_Aligned/VCFSampleIDs.txt",header=F)[[1]]
+
+#load total depth per SNP per sample
+Wengan_MAF001_R75_RandomSNP_Aligned_Depth2 <- Wengan_MAF001_R75_RandomSNP_Aligned_Depth %>% 
+  setNames(c("Name",Wengan_MAF001_R75_RandomSNP_Aligned_SampleIDs)) %>% 
+  mutate(Name2=Name) %>% 
+  separate_wider_delim(cols=Name2, delim = " ", names=c("CHROM","POS","SNP","Junk")) %>% 
+  dplyr::mutate(SNP = str_replace(SNP,":","_")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][+]")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][-]")) %>% 
+  relocate(SNP, .before=Name) %>% 
+  dplyr::select(!c(Name,CHROM,POS,Junk)) %>% 
+  mutate(TotalSNPDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalSNPDepth, .after=SNP) 
+
+ReadDepthPerSNP_Wengan_MAF001_R75_RandomSNP_Aligned_Histo <- ggplot(data = Wengan_MAF001_R75_RandomSNP_Aligned_Depth2,
+                                                                    aes(x=TotalSNPDepth)) +
+  geom_histogram(bins=50) +
+  ylab('Count') + 
+  xlab("Total Read Depth Across Samples") +
+  theme_bw() +
+  theme(axis.title=element_text(size = 20),
+        legend.title=element_blank(),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank());ReadDepthPerSNP_Wengan_MAF001_R75_RandomSNP_Aligned_Histo
+ggsave(ReadDepthPerSNP_Wengan_MAF001_R75_RandomSNP_Aligned_Histo, 
+       file = paste0(wd,"06_WenganAlignment/gStacks/MAF001_R75_RandomSNP_Aligned/ReadDepthPerSNP_MAF001_R75_n475_RandomSNP_Histo.pdf"), 
+       height = 8,width = 16, units = "in")
+
+#based on histogram, create a list of SNPs with RDs > 30000 to remove
+HighDepthSNPSRemove_Wengan_MAF001_R75_RandomSNP_Aligned <- Wengan_MAF001_R75_RandomSNP_Aligned_Depth2 %>% 
+  filter(TotalSNPDepth >= 30000) %>% 
+  dplyr::select(SNP) 
+write_tsv(HighDepthSNPSRemove_Wengan_MAF001_R75_RandomSNP_Aligned,
+          col_names = F,
+          file=paste0(wd, "05_filtering_analysis/HighDepthSNPSRemove_Wengan_MAF001_R75_RandomSNP_Aligned.txt"))
+          
+#total read depth per individual#
+Wengan_MAF001_R75_RandomSNP_Aligned_Depth3 <- Wengan_MAF001_R75_RandomSNP_Aligned_Depth2 %>% 
+  dplyr::select(!TotalSNPDepth) %>% 
+  pivot_longer(-SNP) %>% 
+  pivot_wider(names_from=SNP, values_from=value) %>% 
+  mutate(TotalIndivDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalIndivDepth, .after=name) 
+
+ReadDepthPerIndiv_Wengan_MAF001_R75_RandomSNP_Aligned_Histo <- ggplot(data = Wengan_MAF001_R75_RandomSNP_Aligned_Depth3,
+                                                                    aes(x=TotalIndivDepth)) +
+  geom_histogram(bins=50) +
+  ylab('Count of Individuals') + 
+  xlab("Total Read Depth Across all SNPs") +
+  theme_bw() +
+  theme(axis.title=element_text(size = 20),
+        legend.title=element_blank(),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank());ReadDepthPerIndiv_Wengan_MAF001_R75_RandomSNP_Aligned_Histo
+
+          
+          
+#Make Filter lists to remove indivs with >0.2 missing SNPs
+Wengan_RandomSNP75_n475_IndivToRemove <- Wengan_RandomSNP75_snps_per_sample %>% 
+  filter(Post_FreqMissing >= 0.2) %>% 
+  select(Indiv)
+Wengan_RandomSNP75_n475_IndivToRemove <- Wengan_RandomSNP75_n475_IndivToRemove[[1]]
+
+Wengan_RandomSNP75_n475_MissingRemoved <- pops %>% 
+  dplyr::select(Pop,Indiv) %>% 
+  filter(!Indiv %in% Wengan_RandomSNP75_n475_IndivToRemove) %>% 
+  arrange(Pop,Indiv)
+write_tsv(Wengan_RandomSNP75_n475_MissingRemoved,
+          col_names = F,
+          file="/media/brendan/A/Mallory/05_filtering_analysis/Wengan_RandomSNP75_n475_MissingRemoved.txt")
+          
+######plink######
+#remove individuals with missing data and convert to BED
+plink --file /media/brendan/A/Mallory/06_WenganAlignment/gStacks/MAF001_R75_RandomSNP_Aligned/MAF001_R75_RandomSNP_Aligned \
+--keep Wengan_RandomSNP75_n475_MissingRemoved.txt \
+--make-bed \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved \
+--allow-extra-chr
+
+######R######
+#create new file with sex data included - need to remake .fam file with sex included
+Wengan.MAF001_R75_n475_RandomSNP_SexFix <- read.delim(file=paste0(wd,"05_filtering_analysis/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved.fam"),sep="",header=F) %>% 
+  dplyr::rename(FID=V1,
+                IID=V2,
+                Sex=V5) %>% 
+  dplyr::select(!Sex) %>% 
+  left_join(plink_sexfix) %>% #left_join will preserve the sort order of the First table, will need to ,manually fix a few samples
+  relocate(Sex, .before=V6)
+write_tsv(Wengan.MAF001_R75_n475_RandomSNP_SexFix,
+          col_names = F,
+          file=paste0(wd, "05_filtering_analysis/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_SexFix.txt"))
+
+######plink######
+#correct sex IDs
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved \
+--update-sex /media/brendan/A/Mallory/05_filtering_analysis/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_SexFix.txt 3 \
+--make-bed \
+--recode \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved/MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved \
+--allow-extra-chr
+
+#generate test stats
+#--freq \ #get MAF
+#--r2 \ #get LD R2 (based on genotype allele counts)
+
+cd MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved/
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved \
+--freq \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_Stats
+
+#--hardy	\ #get HWE and pval - DO THIS BY POPULATION
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_29W.txt --hardy --allow-extra-chr --allow-no-sex --out 29W
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_BI.txt --hardy --allow-extra-chr --allow-no-sex --out BI
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_Bio.txt --hardy --allow-extra-chr --allow-no-sex --out Bio
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_ESI.txt --hardy --allow-extra-chr --allow-no-sex --out ESI
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_GM.txt --hardy --allow-extra-chr --allow-no-sex --out GM
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_IC.txt --hardy --allow-extra-chr --allow-no-sex --out IC
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved --keep-fam /media/brendan/A/Mallory/05_filtering_analysis/FID_SI.txt --hardy --allow-extra-chr --allow-no-sex --out SI
+
+######R######
+#Filter for HWE
+#MAF
+MAF_Aligned <- read.delim(paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_Stats.frq"),sep="") %>% 
+  dplyr::select(!c(CHR)) %>% 
+  arrange(MAF)
+SNPs_Aligned <- sort(MAF_Aligned$SNP)
+
+#HWE - by pop
+HWE_Aligned_29W <- read.delim(paste0(Wengan_Stacks,"29W.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "29W",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_BI <- read.delim(paste0(Wengan_Stacks,"BI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "BI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_Bio <- read.delim(paste0(Wengan_Stacks,"Bio.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "Bio",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_ESI <- read.delim(paste0(Wengan_Stacks,"ESI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "ESI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_GM <- read.delim(paste0(Wengan_Stacks,"GM.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "GM",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_IC <- read.delim(paste0(Wengan_Stacks,"IC.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "IC",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+HWE_Aligned_SI <- read.delim(paste0(Wengan_Stacks,"SI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "SI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default?
+
+HWE_Aligned <- HWE_Aligned_29W %>% dplyr::select(Pop,SNP,P,Result) %>% 
+  rbind(HWE_Aligned_BI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_Bio %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_ESI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_GM %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_IC %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_SI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  arrange(SNP)
+
+HWE_Aligned_Failed <- (HWE_Aligned %>% #generate list of SNPs that are out of HWE in >=4 pops #449 to remove
+                         dplyr::select(SNP,Result) %>% 
+                         group_by(SNP) %>% 
+                         filter(Result=="FAIL") %>% 
+                         dplyr::summarize(Failed=n()) %>% 
+                         filter(Failed >= 4) %>% 
+                         dplyr::select(SNP))
+write_lines(HWE_Aligned_Failed$SNP, file=paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_HWE_Fails_20Aug2024.txt"), sep="\n")
+
+######plink######
+#filter out SNPs out of HWE in >= 4 pops
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved \
+--exclude MAF001_R75_n475_RandomSNP_Aligned_HWE_Fails_20Aug2024.txt \
+--make-bed --recode \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE --allow-extra-chr
+
+#calculate LD on filtered data
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats2
+
+######R######
+#filter high LD SNPs
+LD_Aligned <- read.delim(paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats2.ld"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned$R2, na.rm=T) # 0.002517762
+LD_Aligned_High <- LD_Aligned %>% filter(R2 > 0.2) #1324 SNP pairs with LD > 0.2
+
+#generate number of occurances of each SNP in LD_Wengan_High
+ProblemSNPCount <- as.data.frame(table(LD_Aligned_High$SNP_A)) %>% 
+  filter(Freq > 0) %>% 
+  rbind(as.data.frame(table(LD_Aligned_High$SNP_B)) %>% 
+          filter(Freq > 0)) %>% 
+  ddply(., .(Var1), numcolwise(sum)) #merge occurrences of the same SNP
+
+#remove all SNPs that appear in this list more than once - 410
+Problem_SNPsToRemove <- ProblemSNPCount %>% 
+  filter(Freq > 1) 
+write_lines(Problem_SNPsToRemove$Var1, file=paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_HWE_LDSNPs_ToRemove_20Aug2024.txt"), sep="\n") #410 problem SNPs
+
+######plink######
+#filter out high LD SNPs and recalculate LD
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE \
+--exclude MAF001_R75_n475_RandomSNP_Aligned_HWE_LDSNPs_ToRemove_20Aug2024.txt \
+--make-bed --recode \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_LD --allow-extra-chr
+
+#check LD again
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_LD \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats3
+
+######R######
+#filter high LD SNPs (round2)
+LD_Aligned_Update <- read.delim(paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats3.ld"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned_Update$R2, na.rm=T) #0.002505667
+LD_Aligned_Update_High <- LD_Aligned_Update %>% filter(R2 >= 0.2) 
+
+#generate number of occurances of each SNP in LD_Aligned_Update_High
+ProblemSNPCount2 <- as.data.frame(table(LD_Aligned_Update_High$SNP_A)) %>% 
+  filter(Freq > 0) %>% 
+  rbind(as.data.frame(table(LD_Aligned_Update_High$SNP_B)) %>% 
+          filter(Freq > 0)) %>% 
+  ddply(., .(Var1), numcolwise(sum)) #merge occurances of the same SNP
+
+#remove all SNPs that appear in this list more than once - none
+Problem_SNPsToRemove2 <- ProblemSNPCount2 %>% 
+  filter(Freq > 1) 
+
+#remove SNPA from LD_Aligned_Update_High - 620 SNPs
+Problem_SNPsToRemove2 <- LD_Aligned_Update_High$SNP_A
+write_lines(Problem_SNPsToRemove2, file=paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_HWE_LDSNPs_ToRemove2_20Aug2024.txt"), sep="\n") #700 problem SNPs
+
+######plink######
+#filter out high LD SNPs (round2) and recalculate LD
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_LD \
+--exclude MAF001_R75_n475_RandomSNP_Aligned_HWE_LDSNPs_ToRemove2_20Aug2024.txt \
+--make-bed --recode \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_LD2 --allow-extra-chr
+
+#check LD again
+plink --bfile MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_LD2 \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats4
+
+######R######
+#filter high LD SNPs (round3)
+LD_Aligned_Update2 <- read.delim(paste0(Wengan_Stacks,"MAF001_R75_n475_RandomSNP_Aligned_MissingRemoved_HWE_Stats4.ld"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned_Update2$R2, na.rm=T) #0.002494566
+LD_Aligned_Update2_High <- LD_Aligned_Update2 %>% filter(R2 >= 0.2) #no SNPs with high LD
+
+
+###FINAL DATASET FOR ANALYSIS####

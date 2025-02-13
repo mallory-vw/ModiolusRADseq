@@ -1,0 +1,371 @@
+#Note, populations filtering was the same for de novo and aligned SNPs, only one example shown
+#examples of other filtering tests at the bottom of the file
+
+###########Populations filtering and output##########
+populations \
+-P /data/04_Aligned/gStacks \
+-O /data/05_Filtered/Aligned \
+--popmap /data/96_PopMaps/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 32 \
+--min-populations 7 \
+--min-samples-per-pop 0.75 \
+--min-maf 0.01 \
+--write-random-snp \
+--plink --vcf --vcf-all
+
+###########Populations output Summary Stats - from within /data/05_Filtered/Aligned ##########
+stacks-dist-extract populations.log.distribs loci_per_sample_prefilters > loci_per_sample_prefiltered.csv
+stacks-dist-extract populations.log.distribs loci_per_sample > loci_per_sample_postfiltered.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs variant_sites_per_sample > snps_per_sample_postfilters.csv #includes missingness, only 1 SNP per locus based on filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_prefilters >  samples_per_loc_prefilters.csv #valid samples matched to a catalog locus pre-filtering
+stacks-dist-extract populations.log.distribs samples_per_loc_postfilters >  samples_per_loc_postfilters.csv #valid samples matched to a catalog locus post-filtering
+stacks-dist-extract populations.log.distribs snps_per_loc_prefilters > snps_per_loc_prefilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+stacks-dist-extract populations.log.distribs snps_per_loc_postfilters > snps_per_loc_postfilters.csv #number of SNPs per catalog locus pre-filtering (post will just be 1)
+
+############Read Depth per Locus VCFtools##########
+#from within /data/05_Filtered/Aligned
+
+#index the vcf first with tabix
+bgzip populations.all.vcf
+tabix -p vcf populations.all.vcf.gz
+
+#to unzip
+bgzip -d populations.all.vcf.gz
+
+#pull out the depths per indiv
+bcftools query -f '%CHROM %POS %ID DPs:[\t%DP]\n' populations.snps.vcf > ReadDepthPerSNPPerIndiv.txt
+
+######################
+##### Filtering ######
+######################
+######R######
+library("tidyverse")
+library("gridExtra")
+
+#set palette for plots
+palette <- c("IC" = "#1B9E77","ESI" = "#D95F02","29W" = "#7570B3","BI" = "#E7298A","GM" = "#66A61E","Bio" = "#E6AB02","SI" = "#666666")
+
+#population metadata
+pops <- read.delim('/data/96_PopMaps/HM_PopMap_AllIndiv_corrected_n475.txt', header=F) %>% 
+  rename(Indiv=V1,Pop=V2)
+
+######Summary Stat Plots######
+#loci per sample
+loci_per_sample <- read.delim('/data/05_Filtered/Aligned/loci_per_sample_prefiltered.csv', comment.char = '#') %>% 
+  rename(Indiv = sample,
+         Pre_Total = n_loci,
+         Pre_Present = present_loci,
+         Pre_missing = missing_loci,
+         Pre_FreqMissing = frequency_missing) %>% 
+  full_join(read.delim('/data/05_Filtered/Aligned/loci_per_sample_postfiltered.csv', comment.char = '#') %>% 
+              rename(Indiv = sample,
+                     Post_Total = n_loci,
+                     Post_Present = present_loci,
+                     Post_missing = missing_loci,
+                     Post_FreqMissing = frequency_missing)) %>% 
+  left_join(pops)
+
+#SNPs per sample
+snps_per_sample <- read.delim('/data/05_Filtered/Aligned/snps_per_sample_postfilters.csv', comment.char = '#') %>% 
+  rename(Indiv=sample,
+         Post_TotalSNPs = n_sites,
+         Post_PresentSNPs = present_sites,
+         Post_MissingSNPs = missing_sites,
+         Post_FreqMissing = frequency_missing) %>% 
+  left_join(pops)
+
+#number of samples by locus count
+samples_per_locus <- read.delim('/data/05_Filtered/Aligned/samples_per_loc_prefilters.csv'), comment.char = '#') %>% 
+  rename(NumSamples = n_samples,
+         Pre_LocusCount = n_loci) %>% 
+  full_join(read.delim('/data/05_Filtered/Aligned/samples_per_loc_postfilters.csv'), comment.char = '#') %>% 
+              rename(NumSamples = n_samples,
+                     Post_LocusCount = n_loci))
+
+# plots for Loci per sample and SNPs per sample 
+PreMissingLoci_DotPlot <- ggplot(data = loci_per_sample %>% mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                      aes(x=Pre_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(loci_per_sample$Pre_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0.9,0.98),breaks=seq(0.9,0.98,0.05))+
+  xlab('Frequency of Missing Loci') + 
+  ylab("Sample") +
+  ggtitle("Before Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+
+PostMissingLoci_DotPlot <- ggplot(data = loci_per_sample %>% mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                      aes(x=Post_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(loci_per_sample$Post_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0,0.5),breaks=seq(0,0.5,0.1))+
+  xlab('Frequency of Missing Loci') + 
+  ylab("Sample") +
+  ggtitle("After Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+ggsave(grid.arrange(PreMissingLoci_DotPlot,PostMissingLoci_DotPlot, nrow=1), 
+       file = '/data/05_Filtered/Aligned/MissingLoci_per_sample_plot.pdf'), 
+       height = 8,width = 16, units = "in")
+
+PostMissingSNP_DotPlot <- ggplot(data = snps_per_sample %>% mutate(Indiv = fct_reorder(Indiv, Pop)),
+                                  aes(x=Post_FreqMissing, y=Indiv)) +
+  geom_point(shape=16, aes(colour=Pop)) +
+  scale_colour_manual(values=palette)+
+  geom_vline(linewidth=1, colour = "red", xintercept = mean(snps_per_sample$Post_FreqMissing), linetype="dashed")+
+  scale_x_continuous(limits=c(0,0.55),breaks=seq(0,0.55,0.1))+
+  xlab('Frequency of Missing SNP') + 
+  ylab("Sample") +
+  ggtitle("After Filtering") +
+  theme_bw() +
+  theme(axis.text.y = element_blank(), legend.title=element_blank(),axis.ticks.y=element_blank(), 
+        axis.title=element_text(size = 20),panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+ggsave(grid.arrange(PostMissingSNP_DotPlot, nrow=1), 
+       file = "/data/05_Filtered/Aligned/MissingSNP_per_sample_plot.pdf"), 
+       height = 8,width = 16, units = "in")
+
+#Total Read Depth Per SNP before populations filtering#
+#this is sum of all read depths per individual for each SNP
+Aligned_ReadDepth <- read.delim("/data/04_Aligned/gStacks/ReadDepthPerSNPPerIndiv.txt",header=F,na.strings = ".")
+Aligned_SampleIDs <- read.delim("/data/04_Aligned/gStacks/VCFSampleIDs.txt",header=F)[[1]]
+
+#load total depth per SNP per sample
+Aligned_ReadDepth2 <- Aligned_ReadDepth %>% 
+  setNames(c("Name",Aligned_SampleIDs)) %>% 
+  mutate(Name2=Name) %>% 
+  separate_wider_delim(cols=Name2, delim = " ", names=c("CHROM","POS","SNP","Junk")) %>% 
+  dplyr::mutate(SNP = str_replace(SNP,":","_")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][+]")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][-]")) %>% 
+  relocate(SNP, .before=Name) %>% 
+  dplyr::select(!c(Name,CHROM,POS,Junk)) %>% 
+  mutate(TotalSNPDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalSNPDepth, .after=SNP) 
+
+Aligned_ReadDepth_Histo <- ggplot(data = Aligned_ReadDepth2,
+                                        aes(x=TotalSNPDepth)) +
+  geom_histogram(bins=50) +
+  ylab('Count') + 
+  xlab("Total Read Depth Across Samples") +
+  theme_bw() +
+  theme(axis.title=element_text(size = 20),
+        legend.title=element_blank(),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank());Aligned_ReadDepth_Histo
+ggsave(Aligned_ReadDepth_Histo, 
+       file = "/data/04_Aligned/gStacks/Aligned_ReadDepth_Histo.pdf"), 
+       height = 8,width = 16, units = "in")
+
+#total read depth per individual#
+Aligned_Depth3 <- Aligned_ReadDepth2 %>% 
+  dplyr::select(!TotalSNPDepth) %>% 
+  pivot_longer(-SNP) %>% 
+  pivot_wider(names_from=SNP, values_from=value) %>% 
+  mutate(TotalIndivDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalIndivDepth, .after=name) 
+
+ReadDepthPerIndiv_Histo <- ggplot(data = Aligned_Depth3,
+                                      aes(x=TotalIndivDepth)) +
+  geom_histogram(bins=50) +
+  ylab('Count of Individuals') + 
+  xlab("Total Read Depth Across all SNPs") +
+  theme_bw() +
+  theme(axis.title=element_text(size = 20),
+        legend.title=element_blank(),
+        panel.border = element_rect(linewidth =0.5),
+        plot.margin=unit(c(5,5,7,5), "mm"),panel.grid=element_blank())
+
+######Make Filter lists to remove indivs with >0.2 missing SNPs
+IndivToRemove <- snps_per_sample %>% 
+  filter(Post_FreqMissing >= 0.2) %>% 
+  select(Indiv)
+IndivToRemove <- IndivToRemove[[1]]
+
+IndivToRemove <- pops %>% 
+  dplyr::select(Pop,Indiv) %>% 
+  filter(!Indiv %in% IndivToRemove) %>% 
+  arrange(Pop,Indiv)
+write_tsv(IndivToRemove,
+          col_names = F,
+          file="/data/05_Filtered/Aligned/Indivs_MissingDataRemoved.txt")
+
+######plink######
+#remove individuals with missing data and convert to BED
+plink --file /data/05_Filtered/Aligned/SNPs \
+--keep Indivs_MissingDataRemoved.txt \
+--make-bed \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved \
+--allow-extra-chr
+
+#generate test stats
+plink --bfile /data/05_Filtered/Aligned/SNPs_MissingRemoved \
+--freq \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_Stats
+
+#--hardy	\ #get HWE and pval - DO THIS BY POPULATION
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_29W.txt --hardy --allow-extra-chr --allow-no-sex --out 29W
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_BI.txt --hardy --allow-extra-chr --allow-no-sex --out BI
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_Bio.txt --hardy --allow-extra-chr --allow-no-sex --out Bio
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_ESI.txt --hardy --allow-extra-chr --allow-no-sex --out ESI
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_GM.txt --hardy --allow-extra-chr --allow-no-sex --out GM
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_IC.txt --hardy --allow-extra-chr --allow-no-sex --out IC
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved --keep-fam /data/05_Filtered/Aligned/MissingRemoved/FID_SI.txt --hardy --allow-extra-chr --allow-no-sex --out SI
+
+######R######
+#Filter for HWE
+#MAF
+MAF_Aligned <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_Stats.frq"),sep="") %>% 
+  dplyr::select(!c(CHR)) %>% 
+  arrange(MAF)
+SNPs_Aligned <- sort(MAF_Aligned$SNP)
+
+#HWE - by pop
+HWE_Aligned_29W <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/29W.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "29W",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) #p=0.001 is plink default
+HWE_Aligned_BI <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/BI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "BI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+HWE_Aligned_Bio <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/Bio.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "Bio",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+HWE_Aligned_ESI <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/ESI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "ESI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+HWE_Aligned_GM <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/GM.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "GM",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+HWE_Aligned_IC <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/IC.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "IC",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+HWE_Aligned_SI <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SI.hwe"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR, TEST)) %>% 
+  mutate(Pop = "SI",Result = case_when(P <= 0.001 ~ "FAIL", P > 0.001 ~ "PASS",.default = NA)) 
+
+HWE_Aligned <- HWE_Aligned_29W %>% dplyr::select(Pop,SNP,P,Result) %>% 
+  rbind(HWE_Aligned_BI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_Bio %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_ESI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_GM %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_IC %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  rbind(HWE_Aligned_SI %>% dplyr::select(Pop,SNP,P,Result)) %>% 
+  arrange(SNP)
+
+HWE_Aligned_Failed <- (HWE_Aligned %>% #generate list of SNPs that are out of HWE in >=4 pops 
+                         dplyr::select(SNP,Result) %>% 
+                         group_by(SNP) %>% 
+                         filter(Result=="FAIL") %>% 
+                         dplyr::summarize(Failed=n()) %>% 
+                         filter(Failed >= 4) %>% 
+                         dplyr::select(SNP))
+write_lines(HWE_Aligned_Failed$SNP, file="/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_Fails.txt"), sep="\n")
+
+######plink######
+#filter out SNPs out of HWE in >= 4 pops
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved \
+--exclude /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_Fails.txt \
+--make-bed --recode \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE --allow-extra-chr
+
+#calculate LD on filtered data
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_Stats
+
+######R######
+#filter high LD SNPs
+LD_Aligned <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_Stats.ld"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned$R2, na.rm=T) # 0.002517762
+LD_Aligned_High <- LD_Aligned %>% filter(R2 > 0.2) #1324 SNP pairs with LD > 0.2
+
+#generate number of occurances of each SNP in LD_Aligned_High
+ProblemSNPCount <- as.data.frame(table(LD_Aligned_High$SNP_A)) %>% 
+  filter(Freq > 0) %>% 
+  rbind(as.data.frame(table(LD_Aligned_High$SNP_B)) %>% 
+          filter(Freq > 0)) %>% 
+  ddply(., .(Var1), numcolwise(sum)) #merge occurrences of the same SNP
+
+#remove all SNPs that appear in this list more than once - 410
+Problem_SNPsToRemove <- ProblemSNPCount %>% 
+  filter(Freq > 1) 
+write_lines(Problem_SNPsToRemove$Var1, file="Aligned_HWE_LDSNPs_ToRemove.txt"), sep="\n") #410 problem SNPs
+
+######plink######
+#filter out high LD SNPs and recalculate LD
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE \
+--exclude Aligned_HWE_LDSNPs_ToRemove.txt \
+--make-bed --recode \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD --allow-extra-chr
+
+#check LD again
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD_Stats
+
+######R######
+#filter high LD SNPs (round2)
+LD_Aligned_Update <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD_Stats.ld"),sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned_Update$R2, na.rm=T) #0.002505667
+LD_Aligned_Update_High <- LD_Aligned_Update %>% filter(R2 >= 0.2) 
+
+#generate number of occurances of each SNP in LD_Aligned_Update_High
+ProblemSNPCount2 <- as.data.frame(table(LD_Aligned_Update_High$SNP_A)) %>% 
+  filter(Freq > 0) %>% 
+  rbind(as.data.frame(table(LD_Aligned_Update_High$SNP_B)) %>% 
+          filter(Freq > 0)) %>% 
+  ddply(., .(Var1), numcolwise(sum)) #merge occurances of the same SNP
+
+#remove all SNPs that appear in this list more than once - none
+Problem_SNPsToRemove2 <- ProblemSNPCount2 %>% 
+  filter(Freq > 1) 
+
+#remove SNPA from LD_Aligned_Update_High - 620 SNPs
+Problem_SNPsToRemove2 <- LD_Aligned_Update_High$SNP_A
+write_lines(Problem_SNPsToRemove2, file="Aligned_HWE_LDSNPs_ToRemove2.txt"), sep="\n") #700 problem SNPs
+
+######plink######
+#filter out high LD SNPs (round2) and recalculate LD
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD \
+--exclude Aligned_HWE_LDSNPs_ToRemove2.txt \
+--make-bed --recode \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2 --allow-extra-chr
+
+#check LD again
+plink --bfile /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2 \
+--r2 --inter-chr --ld-window-r2 0 \
+--allow-extra-chr --allow-no-sex \
+--out /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_Stats
+
+######R######
+#filter high LD SNPs (round3)
+LD_Aligned_Update2 <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2_Stats.ld",sep="",row.names = NULL) %>% 
+  dplyr::select(!c(CHR_A,CHR_B,BP_A,BP_B)) %>% 
+  mutate(SNP_A = factor(SNP_A, levels=SNPs_Aligned),
+         SNP_B = factor(SNP_B, levels=SNPs_Aligned)) %>% 
+  arrange(SNP_A,SNP_B)
+
+mean(LD_Aligned_Update2$R2, na.rm=T) #0.002494566
+LD_Aligned_Update2_High <- LD_Aligned_Update2 %>% filter(R2 >= 0.2) #no SNPs with high LD
+
+###FINAL DATASET FOR ANALYSIS####

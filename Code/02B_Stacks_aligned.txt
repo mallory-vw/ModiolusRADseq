@@ -1,0 +1,72 @@
+######################
+###### bwa-mem2 ######
+######################
+# 02_Trimmed_DemultiplexedData - trimmed and demultiplexed data
+# 96_PopMaps - individual lists
+# 55_Wengan_Genome - genome
+
+#create conda environment
+conda create -n HM_RAD_BWAMEM -c bioconda
+conda activate HM_RAD_BWAMEM
+conda install -c conda-forge -c bioconda bwa-mem2
+conda install -c conda-forge -c bioconda samtools
+
+####start by indexing the genome using bwa-mem2 and samtools####
+bwa-mem2 index data/55_Wengan_Genome/HM_wenganA.fasta
+samtools faidx data/55_Wengan_Genome/HM_wenganA.fasta #needed for bcftools mpileup
+
+####align reads to indexed genome and coordinate sort####
+#NOTE do this from within data/02_Trimmed_DemultiplexedData
+
+SAMPLE_FILE="data/96_PopMaps/ind.txt"
+GENOME="data/55_Wengan_Genome/HM_wenganA.fasta"
+
+#align and sort reads
+while read ind;
+do echo $ind;
+bwa-mem2 mem -t 30 -R "@RG\tID:$ind\tSM:$ind\tLB:Modiolus" $GENOME $ind\.1.fq.gz  $ind\.2.fq.gz | samtools sort -o /data/04_Aligned/Aligned/$ind\.sorted.bam -T $ind -@ 30 -m 2G ;
+done < ind.txt
+
+#index all files
+samtools index -M *.bam
+
+#make sure ID and SM readgroup are unique for each sample so mpileup knows to treat them as different samples
+
+####check RG for a few inds just to make sure the RGs are correct####
+samtools view -H 29W2241959.sorted.bam | grep '^@RG'
+samtools view -H GM2242359.sorted.bam | grep '^@RG'
+samtools view -H SI2242514.sorted.bam | grep '^@RG'
+
+####check alignment stats using flagstat####
+while read ind;
+do echo $ind;
+echo $ind >> Flagstats_Output.txt
+samtools flagstat $ind.sorted.bam >> Flagstats_Output.txt
+done < /data/96_PopMaps/ind.txt
+
+######################
+####### Stacks #######
+######################
+
+#load conda environment
+conda create -n HM_RAD_GSTACKS -c bioconda
+conda activate HM_RAD_GSTACKS
+conda install -c conda-forge -c bioconda stacks 
+
+###########Call SNPS from aligned reads###########
+gstacks \
+-I /data/04_Aligned/Aligned \
+-S ".sorted.bam" \
+-M /data/96_PopMaps/HM_PopMap_AllIndiv_corrected_n475.txt \
+--threads 60 \
+--rm-pcr-duplicates \
+-O /data/04_Aligned/gStacks
+
+###########extract summary stats###########
+#coverage following gstacks
+stacks-dist-extract gstacks.log.distribs effective_coverages_per_sample > /data/04_Aligned/gStacks/Avg_coverage_per_sample_paired.csv
+
+##phasing rates per sample - expect a high number
+cat gstacks.log | grep -B 2 -A 3 '^Genotyped'
+stacks-dist-extract gstacks.log.distribs phasing_rates_per_sample > /data/04_Aligned/gStacks/Phasing_per_sample_paired.csv
+ 

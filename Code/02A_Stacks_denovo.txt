@@ -1,0 +1,96 @@
+###################################
+####### Stacks Denovo_map.pl ######
+###################################
+
+#Create and load conda environment
+conda create -n HM_RAD_DENOVOMAP -c bioconda
+conda activate HM_RAD_DENOVOMAP
+conda install -c conda-forge -c bioconda stacks
+conda install -c conda-forge -c bioconda vcftools
+
+######Extract 10 individuals with the highest read count for each population from testing######
+##Extract data from process_radtags log files, once per each library
+## look at stacks-dist-extract process_radtags.raw.log total_raw_read_counts 
+
+stacks-dist-extract data/02_Trimmed_DemultiplexedData/process_radtags.log total_raw_read_counts > Trimmed_Reads_raw_read_counts.txt
+stacks-dist-extract --pretty data/02_Trimmed_DemultiplexedData/process_radtags.log per_barcode_raw_read_counts > Trimmed_Reads_per_barcode_raw_read_counts.txt
+
+#Vary denovo_map.pl "-M", "-n", and "ustacks -m" parameters to extract the most polymorphic loci in 80% of the test individuals
+# -M --> number of mismatches allowed between stacks within individuals (ustacks default = 2)
+# -n --> number of mismatches allowed between stacks between individuals (distance between catalog loci) (cstacks; default = M)
+# -X "ustacks: -m" --> Minimum depth of coverage required to create a stack (default = 3).
+
+######Test001 - determine optimal "-M" and "-n" (one example shown)
+denovo_map.pl \
+-M 3 \
+-n 3 \
+-T 32 \
+-X "ustacks: -m 3" \
+-X "ustacks: --deleverage" \
+--paired \
+--rm-pcr-duplicates \
+--time-components
+--min-samples-per-pop 0.8 \
+--min-populations 7 \
+--samples data/02_Trimmed_DemultiplexedData \
+--popmap data/96_PopMaps/HM_PopMap_TopIndiv.txt \
+-o data/03_denovomap/ParamOptim/Test001 \
+#extract number of polymorphic loci
+cat populations.sumstats.tsv | grep -v '^#' | cut -f 1 | sort -n -u | wc -l
+
+######Test002 - use optimal "-M" and "-n", determine best "ustacks -m", all individuals were coded as one population for this test (one example shown)
+denovo_map.pl \
+-M 2 \
+-n 2 \
+-T 32 \
+-X "ustacks: -m 8" \
+-X "ustacks: --deleverage" \
+--paired \
+--rm-pcr-duplicates \
+--time-components \
+--min-samples-per-pop 0.8 \
+--samples data/02_Trimmed_DemultiplexedData \
+--popmap data/96_PopMaps/HM_PopMap_TopIndiv_OnePop.txt \
+-o data/03_denovomap/ParamOptim/Test002 \
+#extract number of polymorphic loci
+cat populations.sumstats.tsv | grep -v '^#' | cut -f 1 | sort -n -u | wc -l
+
+######Final run after testing
+###this generates the overall catalog of RAD loci (each containing multiple SNPs) that can be filtered with the populations module later
+denovo_map.pl \
+-M 2 \
+-n 2 \
+-T 32 \
+-X "ustacks: -m 8" \
+-X "ustacks: --deleverage" \
+--paired \
+--rm-pcr-duplicates \
+--time-components \
+--samples data/02_Trimmed_DemultiplexedData \
+--popmap data/96_PopMaps/HM_PopMap_AllIndiv_corrected_n475.txt \
+-o data/03_denovomap/Final
+
+######extract summary stats
+##number of polymorphic loci overall
+cat populations.sumstats.tsv | grep -v '^#' | cut -f 1 | sort -n -u | wc -l  
+
+#coverage following ustacks
+stacks-dist-extract denovo_map.log cov_per_sample > data/03_denovomap/Final/Avg_coverage_per_sample_unpaired.csv
+#coverage following gstacks
+stacks-dist-extract gstacks.log.distribs effective_coverages_per_sample > data/03_denovomap/Final/Avg_coverage_per_sample_paired.csv
+
+##phasing rates per sample - expect a high number
+cat gstacks.log | grep -B 2 -A 3 '^Genotyped'
+stacks-dist-extract gstacks.log.distribs phasing_rates_per_sample > data/03_denovomap/Final/Phasing_per_sample_paired.csv
+
+#these will change after populations filtering
+stacks-dist-extract populations.log.distribs loci_per_sample_prefilters > data/03_denovomap/Final/loci_per_sample_prefiltered.csv
+stacks-dist-extract populations.log.distribs loci_per_sample > data/03_denovomap/Final/loci_per_sample_postfiltered.csv
+stacks-dist-extract populations.log.distribs variant_sites_per_sample > data/03_denovomap/Final/snps_per_sample_postfilters.csv
+stacks-dist-extract populations.log.distribs samples_per_loc_prefilters >  data/03_denovomap/Final/samples_per_loc_prefilters.csv
+stacks-dist-extract populations.log.distribs samples_per_loc_postfilters >  data/03_denovomap/Final/samples_per_loc_postfilters.csv
+stacks-dist-extract populations.log.distribs snps_per_loc_prefilters > data/03_denovomap/Final/snps_per_loc_prefilters.csv
+stacks-dist-extract populations.log.distribs snps_per_loc_postfilters > data/03_denovomap/Final/snps_per_loc_postfilters.csv
+
+
+

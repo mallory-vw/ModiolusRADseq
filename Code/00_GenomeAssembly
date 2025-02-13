@@ -1,0 +1,36 @@
+###Estimate genome size with jellyfish
+
+KMER=41 
+jellyfish count -t 56 -C -m $KMER -s 5G -o data/55_Wengan_Genome/jellyfish/41mer_out data/55_Wengan_Genome/RawIllumina/Bio2242476_R1.fastq data/55_Wengan_Genome/RawIllumina/Bio2242476_R2.fastq
+jellyfish histo -o data/55_Wengan_Genome/jellyfish/41mer_out.histo data/55_Wengan_Genome/jellyfish/41mer_out
+
+###Run Wengan assembler on high-depth (Illumina) and long-read (MinION) sequences
+
+cd data/55_Wengan_Genome/RawIllumina
+
+#first let's fastp the Illumina files
+fastp --in1 Bio2242476_R1.fastq.gz \
+--in2 Bio2242476_R2.fastq.gz \
+--out1 Bio2242476_1_trimmed.fastq.gz \
+--out2 Bio2242476_2_trimmed.fastq.gz \
+-R 'Modiolus Genome fastp report' --verbose 
+
+#Now run Wengan on the Illumina and our Nanopore reads
+path/to/wengan.pl -x ontraw -a A -s data/55_Wengan_Genome/RawIllumina/Bio2242476_1_trimmed.fastq.gz,data/55_Wengan_Genome/RawIllumina/Bio2242476_2_trimmed.fastq.gz -l data/55_Wengan_Genome/Nanopore/HMminionreads.fastq.gz -p HM_wenganA -t 80 -g 2100
+
+
+###Generate BUSCO scores for genome
+
+#load conda environment
+conda create -n BUSCO -c bioconda
+conda activate BUSCO
+conda install -c conda-forge -c bioconda busco --solver=libmamba
+
+busco \
+-i data/55_Wengan_Genome/HM_wenganA.fasta \  
+-o data/55_Wengan_Genome/HM_wenganA_BUSCO_Output \ 
+-l  mollusca_odb10 \ #lineage dataset to use
+-m genome \ #assessment mode
+-c 60 \ #number of threads
+--long #Optimize Augustus self-training mode. This adds considerably to the run time, but can improve results for some non-model organisms.
+
