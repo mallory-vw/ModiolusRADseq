@@ -335,26 +335,24 @@ PWWCFst_Stampp_SNPs_MissingRemoved_HWE_LD2_GP_Fst_plot <- ggplot(PWWCFst_Stampp_
         panel.grid.major=element_blank()) +
   NULL
 
-#Nei's D (StAMPP)
+###Nei's D (StAMPP)
 NeiDSNPs_MissingRemoved_HWE_LD2 <- stamppNeisD(stamppConvert(SNPs_MissingRemoved_HWE_LD2_GP, type="genlight"),  #linux only
                                                 nboots = 100, 
                                                 percent = 95, 
                                                 nclusters = (detectCores()-40))
 
-#Genomic Relatedness Matrix (StAMPP)
-SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read_delim("C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt",
-                                                                                col_names = c("Indiv","Pop"))
-
+###Genomic Relatedness Matrix (StAMPP)
 #read in individual and pop names from the .fam file
-SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim(paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.fam"),sep="",header=F) %>% 
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
   dplyr::rename(Pop=V1,Indiv=V2) %>% 
   dplyr::select(Pop,Indiv) 
-SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv
+
 #load genepop file
-SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop(file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.gen"), ncode=3)
-SNPs_MissingRemoved_HWE_LD2_GP$pop #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
+SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop(file = "/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.gen", ncode=3)
+SNPs_MissingRemoved_HWE_LD2_GP #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
 #fix the pop names
-levels(SNPs_MissingRemoved_HWE_LD2_GP$pop) <- c("29W","BI","Bio","ESI","GM","IC","SI")
+levels(SNPs_MissingRemoved_HWE_LD2_GP) <- c("29W","BI","Bio","ESI","GM","IC","SI")
 
 SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- stamppGmatrix(stamppConvert(SNPs_MissingRemoved_HWE_LD2_GP, type="genlight"))
 SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- data.frame(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix) #convert to DF
@@ -363,22 +361,12 @@ SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- SNPs_MissingRemoved_HWE_LD2_Related
   rownames_to_column(var = "IID") %>% 
   relocate(IID) #set IID as the first column
 
-#save and reload on laptop
-write_delim(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix,
-            delim = " ",col_names=T,
-          file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2_RelatedMatrix.csv"))
-
-#load matrix on laptop
-SNPs_MissingRemoved_HWE_LD2_RelatedMatrix <- read_delim(file = "C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/ModiolusRAD/data/SNPs_MissingRemoved_HWE_LD2_RelatedMatrix.csv") #if needed on new computer
-#load PopIndiv on laptop
-SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read_delim("C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/96_HM_PopMap/HM_PopMap_AllIndiv_corrected_n475.txt",
-                                                                                col_names = c("Indiv","Pop"))
-
 #keep only lower triangle of matrix
-SNPs_MissingRemoved_HWE_LD2_RelatedMatrix[,2:473][upper.tri(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix[,2:473])] <- NA
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix_Upper <- SNPs_MissingRemoved_HWE_LD2_RelatedMatrix
+SNPs_MissingRemoved_HWE_LD2_RelatedMatrix_Upper[,2:473][upper.tri(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix_Upper[,2:473])] <- NA
 
 #set column with IID
-SNPs_MissingRemoved_HWE_LD2_Related_Long <- SNPs_MissingRemoved_HWE_LD2_RelatedMatrix %>% 
+SNPs_MissingRemoved_HWE_LD2_Related_Long <- SNPs_MissingRemoved_HWE_LD2_RelatedMatrix_Upper %>% 
   dplyr::rename(Indiv = IID) %>% 
   full_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv) %>% 
   relocate(c("Pop","Indiv")) %>% 
@@ -386,53 +374,61 @@ SNPs_MissingRemoved_HWE_LD2_Related_Long <- SNPs_MissingRemoved_HWE_LD2_RelatedM
   pivot_longer(cols = 3:ncol(.), names_to = "Indiv2", values_to = "Relatedness") %>% 
   filter(!is.na(Relatedness))
 
-#histogram
-histogram <- ggplot(SNPs_MissingRemoved_HWE_LD2_Related_Long, aes(x = Relatedness)) +
-  # geom_histogram(colour = "white",fill="grey40",bins=100)+
-  geom_histogram(binwidth=0.01)+
-  theme_bw() + 
-  theme(panel.grid = element_blank());histogram
-  
-ggheatmap(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix)
+#look at range of values
+SNPs_MissingRemoved_HWE_LD2_Related_Long_NoSame <- SNPs_MissingRemoved_HWE_LD2_Related_Long %>% 
+  filter(Indiv1 != Indiv2)
 
+HalfSibs <- SNPs_MissingRemoved_HWE_LD2_Related_Long_NoSame %>% filter(Relatedness > 0.125)
+SecondCousins <- SNPs_MissingRemoved_HWE_LD2_Related_Long_NoSame %>% filter(Relatedness > 0.025 & Relatedness < 0.125) %>% 
+  left_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv %>% rename(Indiv2 = Indiv), by = "Indiv2")
+SecondCousinsPopComp <- SecondCousins %>% 
+  dplyr::select(Pop.x,Pop.y) %>% 
+  distinct() %>% 
+  mutate(Comp = 1) %>% 
+  arrange(Pop.x,Pop.y) %>% 
+  pivot_wider(names_from = Pop.y, values_from = Comp)
 
-# Hierarchical clustering dendrogram
-hc <- hclust(dist(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix))
-dhc <- as.dendrogram(hc)
-data <- dendro_data(dhc, type = "rectangle")
+histogram <- ggplot(SNPs_MissingRemoved_HWE_LD2_Related_Long_NoSame, aes(x = Relatedness)) +
+  geom_histogram(binwidth=0.001, fill = "deeppink4")+
+  ylab("Count")+
+  theme_bw(base_size=10) + 
+  theme(panel.grid = element_blank(),
+        axis.title.x = element_text(vjust = 1.5),
+        axis.title.y = element_text(vjust = 0.5),
+        plot.margin = unit(c(1,2,0,1), 'mm'))#trbl
 
-labels <- data$labels %>% 
-  rename(Indiv = label) %>% 
-  left_join(SNPs_MissingRemoved_HWE_LD2_PopIndiv)
+HM <- ggheatmap(SNPs_MissingRemoved_HWE_LD2_RelatedMatrix %>% 
+                  column_to_rownames("IID"),
+                text_position_rows = "left",
+                legendName = "Relatedness")+
+  xlab("\nIndividual")   +
+  ylab("Individual\n")   +
+  theme_bw(base_size=10) +
+  theme(
+    legend.position = "right", 
+    legend.title.align=0.5,
+    legend.title=element_text(size = 6),
+    legend.text=element_text(size = 6),
+    # legend.key = element_blank(),
+    legend.margin = margin(0,0,0,-5),
+    axis.title.x = element_text(vjust = 5),
+    axis.text.x = element_blank(),
+    axis.title.y = element_text(vjust = -8),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(0,0,0,0),"mm"), #t,r,b,l
+    panel.border = element_rect(linewidth = 0.5), 
+    panel.grid=element_blank(),
+    text = element_text(family = "sans")) + 
 
-p <- ggplot(data$segments) + 
-  geom_segment(aes(x = x, y = y, xend = xend, yend = yend), linewidth=0.1) + 
-  # geom_text(data = labels, 
-  #           aes(x=x,y=y,label=Indiv, colour = Pop), 
-  #           size=0.7,
-  #           hjust=0)+
-  geom_jitter(data = labels,
-             aes(x=x,y=y,shape=Pop,colour = Pop,fill=Pop),
-             size=1,
-             height=0.05
-             )+
-  scale_colour_manual(values=palette)+
-  scale_fill_manual(values=palette)+
-  scale_shape_manual(values=shapes)+
-  coord_flip() + 
-  scale_y_reverse(expand = c(0.2, 0)) +
-  theme_bw() + 
-  theme(panel.grid=element_blank());p
-
-
-##########per individual het##########
+###per individual heterozygosity
 #read in individual and pop names from the .fam file
-SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim(paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.fam"),sep="",header=F) %>% 
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
   dplyr::rename(Pop=V1,Indiv=V2) %>% 
   dplyr::select(Pop,Indiv) 
 SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv$Indiv
 #load genepop file
-SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop(file = paste0(Wengan_Stacks,"SNPs_MissingRemoved_HWE_LD2.gen"), ncode=3)
+SNPs_MissingRemoved_HWE_LD2_GP <- read.genepop("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.gen", ncode=3)
 SNPs_MissingRemoved_HWE_LD2_GP$pop #Levels: 29W2242635 HM22_42275 Bio2242698 ESI2342156 GM2242438 IC2342188 SI2242505
 #fix the pop names
 levels(SNPs_MissingRemoved_HWE_LD2_GP$pop) <- c("29W","BI","Bio","ESI","GM","IC","SI")
@@ -465,7 +461,6 @@ cld <- cldList(comparison = DT_HMHet_res$Comparison,
                p.value = DT_HMHet_res$P.adj,
                threshold=0.05)[1:2]
 
-
 ##plot of het by pop, including cld
 HetPlot <- ggplot(IndHet_SNPs_MissingRemoved_HWE_LD2, aes(x=Pop, y=Ho)) +
   geom_boxplot(aes(fill=Pop),colour="grey10", linewidth=0.3) +
@@ -493,12 +488,6 @@ HetPlot <- ggplot(IndHet_SNPs_MissingRemoved_HWE_LD2, aes(x=Pop, y=Ho)) +
         plot.margin=unit(c(5,5,7,5), "mm"),
         panel.grid=element_blank()) +
   NULL
-ggsave(HetPlot, file="C:/Users/VANWYNGAARDENMA/Documents/MCT/HM/Figures/HetPerPop_30Oct2024.pdf",
-       height=5,width=8,unit="in")
-
-
-
-
 
 ########################
 ##########PCAs##########
@@ -510,13 +499,10 @@ palette <- c("IC" = "#1B9E77","ESI" = "#D95F02","29W" = "#7570B3","BI" = "#E7298
 shapes <-   c("IC" = 21,"ESI" = 24,"29W" = 21,"BI" = 22,"GM" = 25,"Bio" = 23,"SI" = 22)
 
 ######R######
-#data formatting
 library(plyr)
 library(reshape2)
 library(splitstackshape)
 library(tidyverse)
-
-#data analysis
 library(pcadapt)
 
 ##### Load Metadata #####
@@ -606,10 +592,494 @@ ggsave(PCA_SNPs_MissingRemoved_HWE_LD2_plot,
 #########################
 ########Admixture########
 #########################
+#example script
+#cross validation --cv
+#set random seed from current time -s time
+#run on 45 cores -j45
+#supervised using the .pop file --supervised filename
 
+./admixture -s time --cv SNPs_MissingRemoved_HWE_LD2.bed 2 -j45 #k2
+
+#####DETERMINE OPTIMAL K#####
+#to figure out optimal K between 1 and 6 with 10-fold cross validation
+
+cd /home/Genomics_Software/admixture_linux-1.3.0
+
+#8414 SNPs
+for K in 1 2 3 4 5 6 7; \
+do ./admixture --cv=10 -s time /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed $K -j40 | tee /data/05_Filtered/Aligned/MissingRemoved/Admixture/AllSNPslog${K}.out; done
+
+#check CV for lowest CV error
+cd /data/05_Filtered/Aligned/MissingRemoved/Admixture/
+grep -h CV AllSNPslog*.out
+
+#K=1 has lowest CV error
+
+#####Multiple Runs of K=2#####
+#Run 1
+./admixture --cv=10 -s time /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed 2 -j45 | tee /data/05_Filtered/Aligned/MissingRemoved/Admixture/AllSNPsK2.Run1.out
+#Run 2
+./admixture --cv=10 -s time /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed 2 -j45 | tee /data/05_Filtered/Aligned/MissingRemoved/Admixture/AllSNPsK2.Run2.out
+#Run 3
+./admixture --cv=10 -s time /data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bed 2 -j45 | tee /data/05_Filtered/Aligned/MissingRemoved/Admixture/AllSNPsK2.Run3.out
+
+
+###############################
+#von Bertalanffy growth curves#
+###############################
+### Von B models
+# for Horse mussel aged data that corresponds with genetic sampled data 
+# J. Sameoto, Nov 27 2024; figure code updated Feb-11-2025
+
+######R######
+library("stats")
+library("nlstools")
+
+dat <- read_delim("/data/Metadata/SNPSampleMetadata.csv")
+
+head(dat)
+
+table(dat$Pop )
+
+summary(dat )
+
+#get rid of rows with NAs for age 
+dat <- dat[!is.na(dat$Total_Age),]
+dim(dat)
+table(dat$Pop )
+# what you have to run vonBs on 
+#29W  BI Bio ESI  GM  IC  SI 
+#64  19  75  58  69   9  31
+
+summary(dat )
+#no NAs 
+
+dat$length <- as.numeric(dat$Length_mm) 
+dat$age <- as.numeric(dat$Total_Age) 
+str(dat)
+
+dat$Pop.f <- as.factor(dat$Pop)
+table(dat$Pop.f)
+
+plot(length ~ age, data=dat,pch=19)
+
+dat.orig <- dat
+
+# Comparison of populations 
+# Starting values 
+svTypical <- vbStarts(length~age,data=dat)
+unlist(svTypical)
+
+svTypical <- list(Linf=100,K=0.09,t0=0.2)
+
+svGen <- mapply(rep,svTypical,c(7,7,1))
+svGen
+
+# Model - Linf, K, by different population 
+vb1 <- length~Linf[Pop.f]*(1-exp(-K[Pop.f]*(age-t0)))
+fitGen <- nls(vb1,data=dat,start=svGen)
+overview(fitGen)
+str(fitGen)
+
+# bootstrap CI 
+bootTypical <- nlsBoot(fitGen,niter=1000)
+confint(bootTypical,plot=TRUE)
+confint(bootTypical)
+
+# residual plots 
+dat$res <- residuals(fitGen)
+plot(residuals(fitGen))
+hist(residuals(fitGen),main="")
+plot( dat$res ~ dat$age)
+abline(a = 0, b = 0)
+
+#get parameters 
+coef <- as.data.frame(summary(fitGen)$coefficients)
+coef
+coef <- cbind(coef, as.data.frame(confint(bootTypical)))
+str(coef)
+coef$pop <- c(rep(levels(dat$Pop.f), 2), "applies to all pops")
+
+#write.csv(coef, "data/Metadata/vonBcoef.csv")
+
+### Predict on model 
+levels(dat$Pop.f)
+#[1] "29W" "BI"  "Bio" "ESI" "GM"  "IC"  "SI" 
+
+new.dat <- data.frame(Pop.f = c(rep("29W",40),rep("BI",40), rep("Bio",40), 
+                                rep("ESI",40), rep("GM",40), rep("IC",40),
+                                rep("SI",40)), age = rep(seq(1,40, by =1),7))
+new.dat$Pop.f <- as.factor(new.dat$Pop.f)
+
+new.dat$pred <- predict(object=fitGen, newdata = new.dat,  asList = TRUE)
+head(new.dat)
+
+#Check plot to ensure labelling is correct 
+ggplot(data = new.dat, aes(x = age, y = pred, group = Pop.f, color = Pop.f)) + 
+  geom_line() + 
+  ylab("Length (mm)") + 
+  xlab("Age (year)") + 
+  geom_point(data = dat, aes(x = age, y = length, group = Pop.f, color = Pop.f))
 
 ########################
 ##########RDAs##########
 ########################
 
+######R######
+library("tidyverse")
+library("vegan")
+library("sdmpredictors")
 
+###load metadata
+HM_metadata <- read_delim("data/Metadata/SNPSampleMetadata.csv")) 
+
+Pop_metadata <- HM_metadata %>% 
+  dplyr::select(Pop,PopName,Latitude,Longitude,Start_lat_DD,End_lat_DD,Start_lon_DD,End_long_DD) %>% 
+  distinct() %>% filter(PopName != "Georges Bank") %>% 
+  mutate(Lat=case_when(is.na(Latitude) ~ ((End_lat_DD+Start_lat_DD)/2), TRUE ~ Latitude), #For cruises, take midpoint for Lat
+         Lon=case_when(is.na(Longitude) ~ ((End_long_DD+Start_lon_DD)/2), TRUE ~ Longitude)) %>%  #For cruises, take midpoint for Lon
+  dplyr::select(Pop,PopName,Lon,Lat) %>% 
+  dplyr::mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+
+PopIndiv <- HM_metadata %>% dplyr::select(c(Pop,SampleID))
+
+###########Load phenotypic data and vonB curve params
+VonB_Data <- read_delim("data/Metadata/vonBcoef.csv")) %>% 
+  setNames(c("Param","Value","SD","T","Pval","95Lower","95Upper","Pop")) %>% 
+  relocate(Pop, .before = Param) %>% 
+  dplyr::mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+
+VonB_RDAData <- VonB_Data %>% 
+  filter(Param == "Linf") %>% 
+  dplyr::select(Pop,Value) %>% 
+  dplyr::rename(Linf = Value) %>% 
+  mutate(LinfScale=scale(Linf)[,1])
+
+###########Load Individual Read Depths
+#read in individual and pop names from the .fam file
+SNPs_MissingRemoved_HWE_LD2_PopIndiv <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.fam",sep="",header=F) %>% 
+  dplyr::rename(Pop=V1,Indiv=V2) %>% 
+  dplyr::select(Pop,Indiv)
+SNPs_MissingRemoved_HWE_LD2_Indivs <- SNPs_MissingRemoved_HWE_LD2_PopIndiv
+
+#read in SNP names from the .bim file
+SNPs_MissingRemoved_HWE_LD2_SNPs <- read.delim("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.bim",sep="",header=F) %>% 
+  dplyr::rename(SNP=V2) %>% 
+  dplyr::select(SNP)
+SNPs_MissingRemoved_HWE_LD2_SNPs <- SNPs_MissingRemoved_HWE_LD2_SNPs[[1]]
+
+#load total depth per SNP per sample
+SNPs_MissingRemoved_HWE_LD2_SampleIDs <- read.delim("/data/04_Aligned/gStacks/VCFSampleIDs.txt",header=F,na.strings = ".")[[1]]
+SNPs_MissingRemoved_HWE_LD2_Depths <- read.delim("/data/04_Aligned/gStacks/ReadDepthPerSNPPerIndiv.txt",header=F,na.strings = ".") %>% 
+  setNames(c("Name",SNPs_MissingRemoved_HWE_LD2_SampleIDs)) %>% 
+  dplyr::mutate(Name2=Name) %>% 
+  separate_wider_delim(cols=Name2, delim = " ", names=c("CHROM","POS","SNP","Junk")) %>% 
+  dplyr::mutate(SNP = str_replace(SNP,":","_")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][+]")) %>% 
+  dplyr::mutate(SNP = str_remove(SNP, "[:][-]")) %>% 
+  relocate(SNP, .before=Name) %>% 
+  dplyr::select(!c(Name,CHROM,POS,Junk)) %>% 
+  filter(SNP %in% SNPs_MissingRemoved_HWE_LD2_SNPs) %>% #keep only the SNPs that are in the dataset
+  dplyr::select(c(SNP, all_of(SNPs_MissingRemoved_HWE_LD2_Indivs))) %>% #keep only the columns for the individuals in the final dataset
+  mutate(TotalSNPDepth = rowSums(.[2:ncol(.)], na.rm=T)) %>% 
+  mutate(MeanSNPDepth = round(rowMeans(.[,2:ncol(.)], na.rm=T))) %>% 
+  relocate(c(TotalSNPDepth,MeanSNPDepth), .after=SNP) 
+
+#total and mean depth per indiv
+SNPs_MissingRemoved_HWE_LD2_TotalIndivDepths <- SNPs_MissingRemoved_HWE_LD2_Depths %>% 
+  dplyr::select(!c(TotalSNPDepth, MeanSNPDepth)) %>% 
+  pivot_longer(!SNP,names_to = "SampleID", values_to = "Depth") %>% #transpose so Individuals are rows
+  mutate(Depth=as.numeric(Depth)) %>% 
+  pivot_wider(names_from = "SNP", values_from = "Depth") %>% 
+  mutate(TotalIndivDepth = rowSums(.[,2:ncol(.)], na.rm=T)) %>% 
+  relocate(TotalIndivDepth, .after=SampleID) %>% 
+  mutate(MeanIndivDepth = round(rowMeans(.[,3:ncol(.)], na.rm=T))) %>% 
+  relocate(MeanIndivDepth, .after=TotalIndivDepth) %>% 
+  dplyr::select(SampleID,TotalIndivDepth,MeanIndivDepth)
+
+###Load Enviro Data from sdmpredictors
+environment.bottom <- load_layers(c("BO22_templtmax_bdmean", 
+                                    "BO22_templtmin_bdmean", 
+                                    "BO22_dissoxltmax_bdmean",
+                                    "BO22_dissoxltmin_bdmean",
+                                    "BO22_salinityltmax_bdmean",
+                                    "BO22_salinityltmin_bdmean"))
+
+environment.surface <- load_layers(c("BO22_templtmax_ss",
+                                     "BO22_templtmin_ss",
+                                     "BO22_dissoxltmax_ss",
+                                     "BO22_dissoxltmin_ss",
+                                     "BO22_salinityltmax_ss",
+                                     "BO22_salinityltmin_ss"))
+
+#extract data for my sites specifically
+HM.sites.environment <- data.frame(Pop=Pop_metadata$Pop, #set pop ID
+                                   Pop2=Pop_metadata$Pop, #create dummy var to convert to rowname
+                                   Lon=Pop_metadata$Lon,
+                                   Lat=Pop_metadata$Lat,
+                                   raster::extract(environment.bottom,Pop_metadata[,3:4]),#extract the environment data for each point
+                                   raster::extract(environment.surface,Pop_metadata[,3:4]) ) %>%   
+  column_to_rownames("Pop2")
+
+#scale enviro data to 0 mean and unit variance (subtract mean and divide by SD)
+foo <- HM.sites.environment[,4:ncol(HM.sites.environment)] #make dummy variable of the enviro data I want to standardize
+foo.scale <- scale(foo) #standardize the variables
+colnames(foo.scale) <- paste(colnames(foo.scale), "stand", sep="_") #rename the standardized variables
+HM.sites.environment.scale <- cbind(HM.sites.environment, foo.scale) #%>% #bind the standardized data back in (haven't changed row order so should all be in the same order)
+# dplyr::select(c(1:4,29:ncol(.),5:28)) #reorder by column location
+rm(foo,foo.scale) #remove dummy vars
+rownames(HM.sites.environment.scale) <- HM.sites.environment.scale$Pop
+
+###Enviro PCA
+#Run enviro PCA and extract the PCs to use as variables in the RDA
+#use dudi.pca from ade4 to run the pca
+
+#data stored in the dudi.pca
+# c1 --> LOADING of Vars, column normed scores (how much each variable contributes to the PC) --> gives the variables' coordinates, normed to 1 (enviro vars) --> qualitative, which variables contribute to the PCs
+# l1 --> LOADING of Sites, row normed scores --> gives the sites' coordinates, normed to 1 (sample sites)
+# co --> Coordinates of Vars --> gives the variables' coordinates, normed to the square root of the eigenvalues (enviro vars) --> arrows on plot, how much each var in pulling the PCA
+# li --> Coordinates of Sites --> gives the sites' coordinates, normed to the square root of the eigenvalues. It's also called the individuals' scores (sample sites) -> extract for RDA vars
+
+HM_Enviro_Sites_PCA <- dudi.pca(HM.sites.environment.scale %>% dplyr::select(c("BO22_templtmax_bdmean_stand","BO22_templtmin_bdmean_stand",
+                                                                              "BO22_dissoxltmax_bdmean_stand","BO22_dissoxltmin_bdmean_stand",
+                                                                              "BO22_salinityltmax_bdmean_stand","BO22_salinityltmin_bdmean_stand",
+                                                                              "BO22_templtmax_ss_stand","BO22_templtmin_ss_stand",
+                                                                              "BO22_dissoxltmax_ss_stand","BO22_dissoxltmin_ss_stand",
+                                                                              "BO22_salinityltmax_ss_stand","BO22_salinityltmin_ss_stand")),
+                                               center=F,scale=F, #centering and scaling already done manually
+                                               scannf=F, nf=6) #view screeplot to see how many axes to keep
+
+#extract individual coordinates for plotting - PCs over 10% variance
+HM_Sites_PCAData <- HM.sites.environment.scale[,1:3]
+HM_Sites_PCAData$PC1 <- HM_Enviro_Sites_PCA$li[,1]
+HM_Sites_PCAData$PC2 <- HM_Enviro_Sites_PCA$li[,2]
+
+#plot
+EnviroPCASites_plot <- ggplot(HM_Sites_PCAData, aes(x=PC1, y=PC2)) +
+  geom_hline(linewidth=0.3, colour = "grey50", yintercept = 0) + #horizontal line through the origin
+  geom_vline(linewidth=0.3, colour = "grey50", xintercept = 0) + #vertical line through the origin
+  geom_point(size=2, aes(shape = Pop,fill = Pop,colour = Pop)) + 
+  xlab("PC1 (60.8%)")   +
+  ylab("PC2 (22.6%)")   +
+  scale_shape_manual(values=shapes)+
+  scale_fill_manual(values=palette)+
+  scale_colour_manual(values=palette)+
+  theme_bw(base_size=10) +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(size=8,vjust=1.5,margin = unit(c(3,0,0,0), "mm")),
+    axis.title.y = element_text(size=8,vjust=-1, margin = unit(c(0,3,0,0), "mm")),
+    plot.margin = unit(c(0,0,0,-5),"mm"), #t,r,b,l
+    panel.border = element_rect(linewidth = 0.5), 
+    panel.grid=element_blank(),
+    text = element_text(family = "sans")
+  ) +
+  NULL
+
+###Extract Enviro PCs and Add vonB Data and read depth
+HM_Sites_EnviroPhenoData <- HM_Sites_PCAData %>% 
+  full_join(VonB_RDAData) %>% 
+  dplyr::select(!Linf) #keep only LinfScale
+
+#create a df with enviro data for all indivs and add PC scores
+HM_Indivs_EnviroPhenoData <- inner_join(HM_metadata[,c(1,3)],HM_Sites_EnviroPhenoData) %>% 
+  left_join(SNPs_MissingRemoved_HWE_LD2_TotalIndivDepths)
+
+#RDAs
+#load data in RAW format (from plink) for RDA
+SNPs_MissingRemoved_HWE_LD2 <- fread("/data/05_Filtered/Aligned/MissingRemoved/SNPs_MissingRemoved_HWE_LD2.raw", stringsAsFactors = F, data.table = F) %>%
+  dplyr::rename(Pop = FID,
+                SampleID=IID)
+
+#extract just the genotypes and impute missing data - replace with most common genotype
+GenIndivData <- SNPs_MissingRemoved_HWE_LD2[,7:ncol(SNPs_MissingRemoved_HWE_LD2)] %>%
+  `rownames<-`(., SNPs_MissingRemoved_HWE_LD2$SampleID)  #add individual name as rowname
+(sum(is.na(GenIndivData))/(sum(is.na(GenIndivData)+!is.na(GenIndivData))))*100 #6.8% missing data before imputation
+
+GenIndivData_Impute <- apply(GenIndivData, 2, function(x) replace(x, is.na(x), as.numeric(names(which.max(table(x))))))
+(sum(is.na(GenIndivData_Impute[,2:ncol(GenIndivData_Impute)]))/(sum(is.na(GenIndivData_Impute[,2:ncol(GenIndivData_Impute)])+!is.na(GenIndivData_Impute[,2:ncol(GenIndivData_Impute)]))))*100 #0% missing data after imputation
+GenIndivData_Impute <- as.data.frame(GenIndivData_Impute) %>% 
+  rownames_to_column("SampleID")
+GenIndivData_Impute <- GenIndivData_Impute %>% 
+  left_join(PopIndiv) %>% 
+  relocate(Pop, .before=SampleID) %>% 
+  arrange(SampleID)
+
+HM_Indivs_EnviroPhenoData_forRDA <- HM_Indivs_EnviroPhenoData %>% #join in the Pop/SampleID from the GenData to ensure the same order
+  right_join(GenIndivData_Impute %>% dplyr::select(c(Pop,SampleID))) %>% 
+  relocate(SampleID, .after=Pop) %>% 
+  arrange(SampleID)
+
+#gen/env RDA
+GenEnvPCA_RDA <- rda(GenIndivData_Impute[,3:ncol(GenIndivData_Impute)] ~ PC1 + PC2 + LinfScale,
+                     data=HM_Indivs_EnviroPhenoData_forRDA,
+                     center=F, scale=F)
+summary(GenEnvPCA_RDA)
+RsquareAdj(GenEnvPCA_RDA) #0.000465953 = 0.05%
+
+#GenEnvPCA_RDA Plot
+summary(eigenvals(GenEnvPCA_RDA, model = "constrained")) 
+RsquareAdj(GenEnvPCA_RDA) #0.000465953
+plot(GenEnvPCA_RDA, scaling=1)
+
+#extract important data for ggplot
+IndivPoints_GenEnvPCA_RDA <- as.data.frame(scores(GenEnvPCA_RDA, 
+                                                  scaling = 3,
+                                                  display = "sites")) %>% 
+  cbind(GenIndivData_Impute %>% dplyr::select(c(SampleID,Pop))) %>% 
+  dplyr::mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+EnvArrows_GenEnvPCA_RDA <- as.data.frame(scores(GenEnvPCA_RDA, 
+                                                scaling = 2,
+                                                display = "bp")) %>% 
+  dplyr::mutate(Labels = c("PC1","PC2",paste0("L[INF]")))
+round(100*(summary(GenEnvPCA_RDA)$cont$importance[2, 1:4]), 3) 
+
+GenEnvPCA_RDA_plot <- ggplot(IndivPoints_GenEnvPCA_RDA, aes(x=RDA1, y=RDA2))+
+  geom_hline(linewidth=0.3, colour = "grey50", yintercept = 0) + #horizontal line through the origin
+  geom_vline(linewidth=0.3, colour = "grey50", xintercept = 0) + #vertical line through the origin
+  geom_segment(data = EnvArrows_GenEnvPCA_RDA, aes(x=0, xend=RDA1, y=0, yend=RDA2), 
+               arrow = arrow(length = unit(0.25, "cm")),
+               colour = "navy", linewidth = 0.4) +#env arrows
+  geom_text_repel(data = EnvArrows_GenEnvPCA_RDA, aes(x=RDA1, y=RDA2,label = Labels), 
+                  size = 2,colour = "navy",parse = T,
+                  segment.color=NA,box.padding=0,
+                  nudge_x =c(0.06,-0.08,0.01),#PC1,PC2,Linf
+                  nudge_y =  c(-0.02,0,0.06)) + #labels for env arrows
+  geom_point(data = IndivPoints_GenEnvPCA_RDA, size=0.5, alpha = 0.7, 
+             aes(shape=Pop,fill=Pop,colour=Pop)) + #sample  points
+  scale_shape_manual(values = shapes) +
+  scale_fill_manual(values=palette)+
+  scale_colour_manual(values=palette)+
+  annotate("text",x=-0.4,y=0.64,label=paste("Adjusted~R^2"," == 0.0005"), parse=T,vjust=0,hjust=1, size=2) +
+  xlab("RDA1\n(24.3% of explained variance)") +
+  ylab("RDA2\n(22.2% of explained variance)") +
+  guides(
+    fill = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    colour = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    shape = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01)
+  )+
+  theme_bw(base_size=10) +
+  theme(
+    legend.position = "right", 
+    legend.title=element_blank(),
+    legend.key = element_blank(),
+    legend.margin = margin(0,0,0,-5),
+    axis.title.x = element_text(size=8,vjust=5,margin = unit(c(4,0,0,0), "mm")),
+    axis.title.y = element_text(size=8,vjust=-4, margin = unit(c(0,4,0,0), "mm")),
+    plot.margin = unit(c(0,0,0,0),"mm"), #t,r,b,l
+    panel.border = element_rect(linewidth = 0.5),
+    panel.grid=element_blank(),
+    text = element_text(family = "sans")
+  ) +
+  NULL
+
+#gen/env RDA conditioned on geographic info
+GenEnvPCA_GeogCond_RDA <- rda(GenIndivData_Impute[,3:ncol(GenIndivData_Impute)] ~ PC1 + PC2 + LinfScale + Condition(Lat + Lon),
+                              data=HM_Indivs_EnviroPhenoData_forRDA,
+                              center=F, scale=F)
+summary(GenEnvPCA_GeogCond_RDA)
+RsquareAdj(GenEnvPCA_GeogCond_RDA) #0.0004676231
+round(100*(summary(GenEnvPCA_GeogCond_RDA)$cont$importance[2, 1:4]), 3) 
+
+#extract important data for ggplot
+SNPPoints_GenEnvPCA_GeogCond_RDA <- as.data.frame(scores(GenEnvPCA_GeogCond_RDA, scaling = 3, display = "species"))
+IndivPoints_GenEnvPCA_GeogCond_RDA <- as.data.frame(scores(GenEnvPCA_GeogCond_RDA, scaling = 3, display = "sites")) %>% 
+  cbind(GenIndivData_Impute %>% dplyr::select(c(SampleID,Pop))) %>% 
+  dplyr::mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+EnvArrows_GenEnvPCA_GeogCond_RDA <- as.data.frame(scores(GenEnvPCA_GeogCond_RDA, scaling = 2, display = "bp")) %>% 
+  dplyr::mutate(Labels = c("PC1","PC2",paste0("L[INF]")))
+
+GenEnvPCA_GeogCond_RDA_plot <- ggplot(IndivPoints_GenEnvPCA_GeogCond_RDA, aes(x=RDA1, y=RDA2))+
+  geom_hline(linewidth=0.3, colour = "grey50", yintercept = 0) + #horizontal line through the origin
+  geom_vline(linewidth=0.3, colour = "grey50", xintercept = 0) + #vertical line through the origin
+  geom_segment(data = EnvArrows_GenEnvPCA_GeogCond_RDA, aes(x=0, xend=RDA1, y=0, yend=RDA2), 
+               arrow = arrow(length = unit(0.25, "cm")),
+               colour = "navy", linewidth = 0.4) +#env arrows
+  geom_text_repel(data = EnvArrows_GenEnvPCA_GeogCond_RDA, aes(x=RDA1, y=RDA2,label = Labels), 
+                  size = 2,colour = "navy",parse = T,
+                  segment.color=NA,box.padding=0,
+                  nudge_x =c(-0.06,0.075,0.01),#PC1,PC2,Linf
+                  nudge_y =  c(0,0.01,0.055)) + #labels for env arrows
+  geom_point(data = IndivPoints_GenEnvPCA_GeogCond_RDA, size=0.5, alpha = 0.7, 
+             aes(shape=Pop,fill=Pop,colour=Pop)) + #sample  points
+  scale_shape_manual(values = shapes) +
+  scale_fill_manual(values=palette)+
+  scale_colour_manual(values=palette)+
+  ylim(c(-0.65,0.7)) + 
+  annotate("text",x=-0.28,y=0.68,label=paste("Adjusted~R^2"," == 0.0005"), parse=T,vjust=0,hjust=1, size=2) +
+  xlab("RDA1\n(24.3% of explained variance)") +
+  ylab("RDA2\n(22.6% of explained variance)") +
+  guides(
+    fill = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    colour = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    shape = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01)
+  )+
+  theme_bw(base_size=10) +
+  theme(
+    legend.position = "right", 
+    legend.title=element_blank(),
+    legend.key = element_blank(),
+    legend.margin = margin(0,0,0,-5),
+    axis.title.x = element_text(size=8,vjust=5,margin = unit(c(4,0,0,0), "mm")),
+    axis.title.y = element_text(size=8,vjust=-4, margin = unit(c(0,4,0,0), "mm")),
+    plot.margin = unit(c(0,0,0,-5),"mm"), #t,r,b,l
+    panel.border = element_rect(linewidth = 0.5), 
+    panel.grid=element_blank(),
+    text = element_text(family = "sans")
+  ) +
+  NULL
+
+#gen/env RDA conditioned on read depth
+GenEnvPCA_DepthCond_RDA <- rda(GenIndivData_Impute[,3:ncol(GenIndivData_Impute)] ~ PC1 + PC2 + LinfScale + Condition(TotalIndivDepth),
+                              data=HM_Indivs_EnviroPhenoData_forRDA,
+                              center=F, scale=F)
+summary(GenEnvPCA_DepthCond_RDA)
+RsquareAdj(GenEnvPCA_DepthCond_RDA) #0.0003916704
+round(100*(summary(GenEnvPCA_DepthCond_RDA)$cont$importance[2, 1:4]), 3) 
+
+#extract important data for ggplot
+SNPPoints_GenEnvPCA_DepthCond_RDA <- as.data.frame(scores(GenEnvPCA_DepthCond_RDA, scaling = 3, display = "species"))
+IndivPoints_GenEnvPCA_DepthCond_RDA <- as.data.frame(scores(GenEnvPCA_DepthCond_RDA, scaling = 3, display = "sites")) %>% 
+  cbind(GenIndivData_Impute %>% dplyr::select(c(SampleID,Pop))) %>% 
+  dplyr::mutate(Pop = factor(Pop, levels = c("IC","ESI","SI","Bio","GM","BI","29W")))
+EnvArrows_GenEnvPCA_DepthCond_RDA <- as.data.frame(scores(GenEnvPCA_DepthCond_RDA, scaling = 2, display = "bp")) %>% 
+  dplyr::mutate(Labels = c("PC1","PC2",paste0("L[INF]")))
+
+GenEnvPCA_DepthCond_RDA_plot <- ggplot(IndivPoints_GenEnvPCA_DepthCond_RDA, aes(x=RDA1, y=RDA2))+
+  geom_hline(linewidth=0.3, colour = "grey50", yintercept = 0) + #horizontal line through the origin
+  geom_vline(linewidth=0.3, colour = "grey50", xintercept = 0) + #vertical line through the origin
+  geom_segment(data = EnvArrows_GenEnvPCA_DepthCond_RDA, aes(x=0, xend=RDA1, y=0, yend=RDA2), 
+               arrow = arrow(length = unit(0.25, "cm")),
+               colour = "navy", linewidth = 0.4) +#env arrows
+  geom_text_repel(data = EnvArrows_GenEnvPCA_DepthCond_RDA, aes(x=RDA1, y=RDA2,label = Labels), 
+                  size = 2,colour = "navy",parse = T,
+                  segment.color=NA,box.padding=0,
+                  nudge_x =c(0.08,0.075,0.01),#PC1,PC2,Linf
+                  nudge_y =  c(0.01,0.04,-0.06)) + #labels for env arrows
+  geom_point(data = IndivPoints_GenEnvPCA_DepthCond_RDA, size=0.5, alpha = 0.7, 
+             aes(shape=Pop,fill=Pop,colour=Pop)) + #sample  points
+  scale_shape_manual(values = shapes) +
+  scale_fill_manual(values=palette)+
+  scale_colour_manual(values=palette)+
+  annotate("text",x=-0.37,y=0.94,label=paste("Adjusted~R^2"," == 0.0004"), parse=T,vjust=0,hjust=1, size=2) +
+  xlab("RDA1\n(23.7% of explained variance)") +
+  ylab("RDA2\n(22.2% of explained variance)") +
+  guides(
+    fill = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    colour = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01),
+    shape = guide_legend(override.aes = list(size = 2),byrow = TRUE,keyheight=0.7,keywidth=0.01)
+  )+
+  theme_bw(base_size=10) +
+  theme(
+    legend.position = "right", 
+    legend.title=element_blank(),
+    legend.key = element_blank(),
+    legend.margin = margin(0,0,0,-5),
+    axis.title.x = element_text(size=8,vjust=5,margin = unit(c(4,0,0,0), "mm")),
+    axis.title.y = element_text(size=8,vjust=-4, margin = unit(c(0,4,0,0), "mm")),
+    plot.margin = unit(c(0,0,0,0),"mm"), #t,r,b,l
+    panel.border = element_rect(linewidth = 0.5), 
+    panel.grid=element_blank(),
+    text = element_text(family = "sans")
+  ) +
+  NULL
